@@ -1,0 +1,2610 @@
+# Morning Coffee: Comprehensive TTS Implementation Guide
+
+This document provides a detailed implementation guide for creating a flexible, high-performance text-to-speech (TTS) system in the Morning Coffee project that supports multiple providers including Kokoro, Google Cloud TTS (with Chirp3 voices), Murf.ai, Telnyx TTS, Piper, ElevenLabs, and Azure.
+
+## Table of Contents
+
+1. [Architecture Overview](#architecture-overview)
+2. [Base Implementation](#base-implementation)
+   - [Base Provider Interface](#base-provider-interface)
+   - [Provider Factory](#provider-factory)
+   - [TTS Service](#tts-service)
+3. [Provider Implementations](#provider-implementations)
+   - [KokoroProvider](#kokoroprovider)
+   - [GoogleProvider](#googleprovider)
+   - [MurfProvider](#murfprovider)
+   - [TelnyxProvider](#telnyxprovider)
+   - [PiperProvider](#piperprovider)
+   - [ElevenlabsProvider](#elevenlabsprovider)
+   - [AzureProvider](#azureprovider)
+4. [Integration with Morning Coffee](#integration-with-morning-coffee)
+   - [TTS Service Initialization](#tts-service-initialization)
+   - [Telnyx Integration](#telnyx-integration)
+   - [Webhook Handler Updates](#webhook-handler-updates)
+5. [Performance Optimizations](#performance-optimizations)
+   - [Caching System](#caching-system)
+   - [Background Processing](#background-processing)
+   - [Prewarming and Voice Pooling](#prewarming-and-voice-pooling)
+6. [Configuration Management](#configuration-management)
+   - [Environment Variables](#environment-variables)
+   - [Provider Selection](#provider-selection)
+   - [Voice Mapping](#voice-mapping)
+7. [Docker Configuration](#docker-configuration)
+8. [Testing and Verification](#testing-and-verification)
+9. [Troubleshooting](#troubleshooting)
+
+## Architecture Overview
+
+The architecture follows a modular design with these components:
+
+```
+┌─────────────────────────────────────┐
+│            TTS Service              │
+│  (Manages providers and integration)│
+└───────────────┬─────────────────────┘
+                │
+                ▼
+┌─────────────────────────────────────┐
+│         Provider Factory            │
+└───────┬───────┬───────┬─────────────┘
+        │       │       │
+        ▼       ▼       ▼
+┌───────────┐ ┌─────┐ ┌─────────────┐
+│ Kokoro    │ │Google│ │ Murf.ai    │ ...
+│ Provider  │ │Prov. │ │ Provider   │
+└───────────┘ └─────┘ └─────────────┘
+```
+
+Each provider implements a common interface, allowing the TTS Service to work with any provider seamlessly. The TTS Service handles provider selection, caching, and integration with Telnyx for audio playback.
+
+## Base Implementation
+
+### Base Provider Interface
+
+First, let's create the base abstract class that all providers will implement:
+
+```python
+# app/modules/tts/base_provider.py
+from abc import ABC, abstractmethod
+from typing import Dict, Any, Optional, Tuple, List
+import pyaudio
+
+class BaseTTSProvider(ABC):
+    """Base abstract class for all TTS providers."""
+    
+    @abstractmethod
+    def generate_speech(self, text: str, voice_id: Optional[str] = None, 
+                       speed: float = 1.0) -> Optional[bytes]:
+        """
+        Generate speech from text.
+        
+        Args:
+            text (str): Text to convert to speech
+            voice_id (Optional[str]): Voice identifier
+            speed (float): Speech speed factor (1.0 = normal)
+            
+        Returns:
+            Optional[bytes]: Audio data as bytes or None if generation failed
+        """
+        pass
+    
+    @abstractmethod
+    def get_voices(self) -> Dict[str, Any]:
+        """
+        Get available voices for this provider.
+        
+        Returns:
+            Dict[str, Any]: Dictionary containing voice information
+        """
+        pass
+    
+    @abstractmethod
+    def set_voice(self, voice_id: str) -> bool:
+        """
+        Set the active voice.
+        
+        Args:
+            voice_id (str): Voice identifier
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        pass
+    
+    @abstractmethod
+    def health_check(self) -> Dict[str, Any]:
+        """
+        Check health status of the provider.
+        
+        Returns:
+            Dict[str, Any]: Health status information
+        """
+        pass
+    
+    @abstractmethod
+    def get_stream_info(self) -> Tuple[int, int, int]:
+        """
+        Get audio stream information.
+        
+        Returns:
+            Tuple[int, int, int]: Audio format, channels, and sample rate
+        """
+        pass
+    
+    def voice_exists(self, voice_id: str) -> bool:
+        """
+        Check if a voice exists in this provider.
+        
+        Args:
+            voice_id (str): Voice identifier
+            
+        Returns:
+            bool: True if voice exists, False otherwise
+        """
+        voices = self.get_voices()
+        return voice_id in voices.get("voices", {})
+```
+
+### Provider Factory
+
+Next, let's create the factory class for instantiating providers:
+
+```python
+# app/modules/tts/provider_factory.py
+import logging
+from typing import Dict, Any, Optional, Type
+
+from .base_provider import BaseTTSProvider
+from .providers.kokoro_provider import KokoroProvider
+from .providers.google_provider import GoogleProvider
+from .providers.murf_provider import MurfProvider
+from .providers.telnyx_provider import TelnyxProvider
+from .providers.piper_provider import PiperProvider
+from .providers.elevenlabs_provider import ElevenlabsProvider
+from .providers.azure_provider import AzureProvider
+
+logger = logging.getLogger("tts-factory")
+
+class TTSProviderFactory:
+    """Factory class for creating TTS provider instances."""
+    
+    # Registry of available providers
+    _providers = {
+        "kokoro": KokoroProvider,
+        "google": GoogleProvider,
+        "murf": MurfProvider,
+        "telnyx": TelnyxProvider,
+        "piper": PiperProvider,
+        "elevenlabs": ElevenlabsProvider,
+        "azure": AzureProvider
+    }
+    
+    @classmethod
+    def register_provider(cls, name: str, provider_class: Type[BaseTTSProvider]) -> None:
+        """
+        Register a new provider class.
+        
+        Args:
+            name (str): Provider name
+            provider_class (Type[BaseTTSProvider]): Provider class
+        """
+        cls._providers[name.lower()] = provider_class
+        logger.info(f"Registered TTS provider: {name}")
+    
+    @classmethod
+    def create_provider(cls, provider_type: str, redis_client=None, 
+                        config: Optional[Dict[str, Any]] = None) -> BaseTTSProvider:
+        """
+        Create and return a TTS provider based on type.
+        
+        Args:
+            provider_type (str): Type of provider to create
+            redis_client: Redis client for caching (optional)
+            config (Optional[Dict[str, Any]]): Provider configuration
+            
+        Returns:
+            BaseTTSProvider: Instantiated provider
+            
+        Raises:
+            ValueError: If provider type is unknown
+        """
+        config = config or {}
+        provider_type = provider_type.lower()
+        
+        if provider_type not in cls._providers:
+            available = ", ".join(cls._providers.keys())
+            raise ValueError(f"Unknown provider type: {provider_type}. Available providers: {available}")
+        
+        provider_class = cls._providers[provider_type]
+        
+        # Pass redis_client if the provider supports it
+        if "redis_client" in provider_class.__init__.__code__.co_varnames:
+            provider = provider_class(redis_client=redis_client, **config)
+        else:
+            provider = provider_class(**config)
+        
+        logger.info(f"Created TTS provider: {provider_type}")
+        return provider
+    
+    @classmethod
+    def get_available_providers(cls) -> List[str]:
+        """
+        Get list of available provider types.
+        
+        Returns:
+            List[str]: List of available provider names
+        """
+        return list(cls._providers.keys())
+```
+
+### TTS Service
+
+Now, let's create the TTS Service that coordinates providers and integrates with the rest of the application:
+
+```python
+# app/modules/tts/tts_service.py
+import logging
+import json
+import hashlib
+import time
+from typing import Dict, Any, Optional, List, Tuple
+
+from .provider_factory import TTSProviderFactory
+from .base_provider import BaseTTSProvider
+
+logger = logging.getLogger("tts-service")
+
+class TTSService:
+    """
+    TTS service that coordinates providers and Telnyx integration.
+    
+    This service manages TTS providers, handles caching, and integrates
+    with Telnyx for audio playback in the Morning Coffee application.
+    """
+    
+    def __init__(self, redis_client=None, telnyx_handler=None, 
+                 config: Optional[Dict[str, Any]] = None):
+        """
+        Initialize the TTS service.
+        
+        Args:
+            redis_client: Redis client for caching
+            telnyx_handler: Telnyx handler for audio upload
+            config (Optional[Dict[str, Any]]): Service configuration
+        """
+        self.redis_client = redis_client
+        self.telnyx_handler = telnyx_handler
+        self.config = config or {}
+        
+        # Get default provider type from config or use kokoro
+        default_provider = self.config.get("default_provider", "kokoro")
+        provider_config = self.config.get("provider_config", {}).get(default_provider, {})
+        
+        # Create default provider
+        self.provider = TTSProviderFactory.create_provider(
+            default_provider, redis_client, provider_config
+        )
+        
+        # Cache settings
+        self.cache_enabled = self.config.get("cache_enabled", True)
+        self.cache_ttl = self.config.get("cache_ttl", 86400)  # 24 hours default
+        
+        # Voice mapping
+        self.voice_mapping = self.config.get("voice_mapping", {})
+        
+        logger.info(f"TTS Service initialized with provider: {default_provider}")
+    
+    def generate_speech(self, text: str, voice_id: Optional[str] = None,
+                        speed: float = 1.0, use_cache: bool = True) -> Optional[bytes]:
+        """
+        Generate speech using current provider.
+        
+        Args:
+            text (str): Text to convert to speech
+            voice_id (Optional[str]): Voice identifier
+            speed (float): Speech speed factor
+            use_cache (bool): Whether to use cache
+            
+        Returns:
+            Optional[bytes]: Audio data as bytes or None if generation failed
+        """
+        if not text:
+            logger.warning("Empty text provided, skipping TTS generation")
+            return None
+        
+        # Map voice ID if needed
+        mapped_voice_id = self._map_voice_id(voice_id)
+        
+        # Check cache if enabled and requested
+        cache_key = None
+        if self.cache_enabled and use_cache and self.redis_client:
+            cache_key = self._get_cache_key(text, mapped_voice_id, speed)
+            cached_audio = self.redis_client.get(cache_key)
+            if cached_audio:
+                logger.debug(f"Cache hit for text: {text[:30]}...")
+                return cached_audio
+        
+        # Generate speech with provider
+        try:
+            audio_data = self.provider.generate_speech(text, mapped_voice_id, speed)
+            
+            # Cache result if successful
+            if audio_data and self.cache_enabled and cache_key and self.redis_client:
+                self.redis_client.setex(cache_key, self.cache_ttl, audio_data)
+                logger.debug(f"Cached audio for text: {text[:30]}...")
+            
+            return audio_data
+        except Exception as e:
+            logger.error(f"Error generating speech: {e}")
+            return None
+    
+    def generate_and_upload(self, text: str, voice_id: Optional[str] = None,
+                           speed: float = 1.0, use_cache: bool = True) -> Optional[Dict[str, Any]]:
+        """
+        Generate speech and upload to Telnyx storage.
+        
+        Args:
+            text (str): Text to convert to speech
+            voice_id (Optional[str]): Voice identifier
+            speed (float): Speech speed factor
+            use_cache (bool): Whether to use cache
+            
+        Returns:
+            Optional[Dict[str, Any]]: Upload information or None if failed
+        """
+        if not self.telnyx_handler:
+            logger.error("Telnyx handler not available")
+            return None
+        
+        # Generate speech
+        audio_data = self.generate_speech(text, voice_id, speed, use_cache)
+        if not audio_data:
+            return None
+        
+        # Upload to Telnyx
+        try:
+            upload_result = self.telnyx_handler.upload_to_storage(file_data=audio_data)
+            return upload_result
+        except Exception as e:
+            logger.error(f"Error uploading to Telnyx: {e}")
+            return None
+    
+    def change_provider(self, provider_type: str,
+                       provider_config: Optional[Dict[str, Any]] = None) -> bool:
+        """
+        Change TTS provider dynamically.
+        
+        Args:
+            provider_type (str): Type of provider to use
+            provider_config (Optional[Dict[str, Any]]): Provider configuration
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Get config from main config if not provided
+            if provider_config is None:
+                provider_config = self.config.get("provider_config", {}).get(provider_type, {})
+            
+            # Create new provider
+            new_provider = TTSProviderFactory.create_provider(
+                provider_type, self.redis_client, provider_config
+            )
+            
+            # Replace current provider
+            self.provider = new_provider
+            logger.info(f"Changed TTS provider to: {provider_type}")
+            return True
+        except Exception as e:
+            logger.error(f"Error changing provider to {provider_type}: {e}")
+            return False
+    
+    def get_available_providers(self) -> List[str]:
+        """
+        Get list of available provider types.
+        
+        Returns:
+            List[str]: List of available provider names
+        """
+        return TTSProviderFactory.get_available_providers()
+    
+    def get_available_voices(self, provider_type: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get available voices for specified provider or current provider.
+        
+        Args:
+            provider_type (Optional[str]): Provider type to query
+            
+        Returns:
+            Dict[str, Any]: Dictionary of available voices
+        """
+        if provider_type:
+            try:
+                # Create temporary provider to get voices
+                provider_config = self.config.get("provider_config", {}).get(provider_type, {})
+                temp_provider = TTSProviderFactory.create_provider(
+                    provider_type, self.redis_client, provider_config
+                )
+                return temp_provider.get_voices()
+            except Exception as e:
+                logger.error(f"Error getting voices for provider {provider_type}: {e}")
+                return {"voices": {}, "error": str(e)}
+        else:
+            # Use current provider
+            return self.provider.get_voices()
+    
+    def health_check(self) -> Dict[str, Any]:
+        """
+        Check health status of the TTS service.
+        
+        Returns:
+            Dict[str, Any]: Health status information
+        """
+        result = {
+            "service": "tts",
+            "provider": self.provider.__class__.__name__,
+            "cache_enabled": self.cache_enabled,
+            "cache_ttl": self.cache_ttl
+        }
+        
+        # Check provider health
+        try:
+            provider_health = self.provider.health_check()
+            result["provider_health"] = provider_health
+            result["status"] = provider_health.get("status", "unknown")
+        except Exception as e:
+            result["provider_health"] = {"error": str(e)}
+            result["status"] = "error"
+        
+        # Check Redis if available
+        if self.redis_client:
+            try:
+                self.redis_client.ping()
+                result["cache_status"] = "connected"
+            except Exception as e:
+                result["cache_status"] = f"error: {str(e)}"
+        else:
+            result["cache_status"] = "disabled"
+        
+        return result
+    
+    def clear_cache(self) -> int:
+        """
+        Clear the TTS cache.
+        
+        Returns:
+            int: Number of cache entries cleared
+        """
+        if not self.redis_client:
+            return 0
+        
+        try:
+            # Get all keys matching the pattern
+            pattern = "tts:cache:*"
+            keys = self.redis_client.keys(pattern)
+            
+            if not keys:
+                return 0
+            
+            # Delete all matching keys
+            count = self.redis_client.delete(*keys)
+            logger.info(f"Cleared {count} entries from TTS cache")
+            return count
+        except Exception as e:
+            logger.error(f"Error clearing TTS cache: {e}")
+            return 0
+    
+    def _get_cache_key(self, text: str, voice_id: Optional[str], speed: float) -> str:
+        """
+        Generate cache key for TTS request.
+        
+        Args:
+            text (str): Text to convert to speech
+            voice_id (Optional[str]): Voice identifier
+            speed (float): Speech speed factor
+            
+        Returns:
+            str: Cache key
+        """
+        # Create a unique key based on text, voice, and speed
+        key_parts = [text, str(voice_id or "default"), str(speed)]
+        key_string = ":".join(key_parts)
+        key_hash = hashlib.md5(key_string.encode()).hexdigest()
+        
+        # Add provider name to cache key to avoid collisions
+        provider_name = self.provider.__class__.__name__.lower()
+        return f"tts:cache:{provider_name}:{key_hash}"
+    
+    def _map_voice_id(self, voice_id: Optional[str]) -> Optional[str]:
+        """
+        Map application voice ID to provider-specific voice ID.
+        
+        Args:
+            voice_id (Optional[str]): Application voice ID
+            
+        Returns:
+            Optional[str]: Provider-specific voice ID
+        """
+        if not voice_id:
+            return None
+        
+        # Get the current provider name
+        provider_name = self.provider.__class__.__name__.lower().replace("provider", "")
+        
+        # Check if we have a mapping for this voice and provider
+        mapping = self.voice_mapping.get(voice_id, {}).get(provider_name)
+        
+        if mapping:
+            logger.debug(f"Mapped voice {voice_id} to {mapping} for provider {provider_name}")
+            return mapping
+        
+        # If no mapping found, return the original voice ID
+        return voice_id
+```
+
+## Provider Implementations
+
+### KokoroProvider
+
+Let's implement the Kokoro Provider using RealtimeTTS:
+
+```python
+# app/modules/tts/providers/kokoro_provider.py
+import logging
+import tempfile
+import os
+import time
+import traceback
+from typing import Dict, Any, Optional, Tuple
+
+import pyaudio
+from RealtimeTTS import TextToAudioStream, KokoroEngine
+
+from ..base_provider import BaseTTSProvider
+
+logger = logging.getLogger("kokoro-provider")
+
+class KokoroProvider(BaseTTSProvider):
+    """TTS provider using Kokoro engine via RealtimeTTS."""
+    
+    def __init__(self, redis_client=None, **kwargs):
+        """
+        Initialize Kokoro provider.
+        
+        Args:
+            redis_client: Redis client for caching (not used by this provider)
+            **kwargs: Additional configuration options
+        """
+        self.engine = KokoroEngine()
+        self.current_voice = None
+        
+        # Cache for available voices
+        self._voices = None
+        
+        # Load voice mapping
+        self._voice_mapping = {
+            "en_female_1": "en_female",
+            "en_female_2": "en_female_bright",
+            "en_male_1": "en_male",
+            "en_male_2": "en_male_deep",
+            "en_us_amy": "en_us_amy",
+            "en_us_andy": "en_us_andy",
+            "en_us_ashley": "en_us_ashley",
+            "en_gb_charlie": "en_gb_charlie",
+            "en_gb_emma": "en_gb_emma",
+            "en_gb_john": "en_gb_john"
+        }
+        
+        logger.info("Kokoro TTS provider initialized")
+    
+    def generate_speech(self, text: str, voice_id: Optional[str] = None, 
+                       speed: float = 1.0) -> Optional[bytes]:
+        """
+        Generate speech using Kokoro engine.
+        
+        Args:
+            text (str): Text to convert to speech
+            voice_id (Optional[str]): Voice identifier
+            speed (float): Speech speed factor
+            
+        Returns:
+            Optional[bytes]: Audio data as bytes or None if generation failed
+        """
+        try:
+            if not text:
+                return None
+            
+            # Set voice if provided and different from current
+            if voice_id and voice_id != self.current_voice:
+                self.set_voice(voice_id)
+            
+            logger.debug(f"Generating speech for text: {text[:50]}{'...' if len(text) > 50 else ''}")
+            
+            # Create a temporary file to store the audio
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
+                output_path = temp_file.name
+            
+            # Create stream and generate audio
+            start_time = time.time()
+            
+            # Create a TextToAudioStream with the engine
+            stream = TextToAudioStream(self.engine, muted=True)
+            stream.feed(text)
+            stream.play(output_wavfile=output_path, log_synthesized_text=False)
+            
+            generation_time = time.time() - start_time
+            logger.debug(f"Speech generation took {generation_time:.2f} seconds")
+            
+            # Read the generated WAV file
+            with open(output_path, 'rb') as audio_file:
+                audio_data = audio_file.read()
+            
+            # Clean up the temporary file
+            os.unlink(output_path)
+            
+            return audio_data
+            
+        except Exception as e:
+            logger.error(f"Error generating speech: {e}")
+            logger.debug(traceback.format_exc())
+            return None
+    
+    def get_voices(self) -> Dict[str, Any]:
+        """
+        Get available Kokoro voices.
+        
+        Returns:
+            Dict[str, Any]: Dictionary containing available voices
+        """
+        if self._voices is None:
+            # Define standard voice options we want to expose
+            self._voices = {
+                "en_female_1": {"name": "English Female", "language": "en"},
+                "en_female_2": {"name": "English Female 2", "language": "en"},
+                "en_male_1": {"name": "English Male", "language": "en"},
+                "en_male_2": {"name": "English Male 2", "language": "en"},
+                "en_us_amy": {"name": "US Amy", "language": "en"},
+                "en_us_andy": {"name": "US Andy", "language": "en"},
+                "en_us_ashley": {"name": "US Ashley", "language": "en"},
+                "en_gb_charlie": {"name": "GB Charlie", "language": "en"},
+                "en_gb_emma": {"name": "GB Emma", "language": "en"},
+                "en_gb_john": {"name": "GB John", "language": "en"},
+            }
+            
+        return {"voices": self._voices}
+    
+    def set_voice(self, voice_id: str) -> bool:
+        """
+        Set the voice to use for TTS.
+        
+        Args:
+            voice_id (str): Voice identifier
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Map our voice IDs to Kokoro voices
+            voice_name = self._voice_mapping.get(voice_id, "en_female")
+            self.engine.set_voice(voice_name)
+            self.current_voice = voice_id
+            logger.debug(f"Voice set to {voice_id} (Kokoro: {voice_name})")
+            return True
+        except Exception as e:
+            logger.error(f"Error setting voice: {e}")
+            return False
+    
+    def health_check(self) -> Dict[str, Any]:
+        """
+        Check if the Kokoro engine is healthy.
+        
+        Returns:
+            Dict[str, Any]: Health status information
+        """
+        try:
+            # Test by generating a small audio sample
+            _ = self.generate_speech("Test", voice_id="en_female_1")
+            return {
+                "status": "healthy",
+                "engine": "Kokoro via RealtimeTTS",
+                "message": "Engine is functioning normally"
+            }
+        except Exception as e:
+            logger.error(f"Health check failed: {e}")
+            return {
+                "status": "unhealthy",
+                "engine": "Kokoro via RealtimeTTS",
+                "message": str(e)
+            }
+    
+    def get_stream_info(self) -> Tuple[int, int, int]:
+        """
+        Get stream configuration information for audio playback.
+        
+        Returns:
+            Tuple[int, int, int]: Audio format, number of channels, and sample rate
+        """
+        return pyaudio.paInt16, 1, 24000  # 16-bit, mono, 24kHz
+```
+
+### GoogleProvider
+
+Now, let's implement the Google Cloud TTS provider with support for Chirp3 voices:
+
+```python
+# app/modules/tts/providers/google_provider.py
+import logging
+import tempfile
+import os
+import time
+import traceback
+from typing import Dict, Any, Optional, Tuple
+
+import pyaudio
+from google.cloud import texttospeech
+import google.api_core.exceptions
+
+from ..base_provider import BaseTTSProvider
+
+logger = logging.getLogger("google-provider")
+
+class GoogleProvider(BaseTTSProvider):
+    """TTS provider using Google Cloud Text-to-Speech API."""
+    
+    def __init__(self, redis_client=None, **kwargs):
+        """
+        Initialize Google Cloud TTS provider.
+        
+        Args:
+            redis_client: Redis client for caching (not used by this provider)
+            **kwargs: Additional configuration options including:
+                - credentials_path: Path to service account json file
+                - project_id: Google Cloud project ID
+        """
+        self.credentials_path = kwargs.get("credentials_path")
+        self.project_id = kwargs.get("project_id")
+        
+        # Initialize client with credentials if provided
+        if self.credentials_path:
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = self.credentials_path
+        
+        self.client = texttospeech.TextToSpeechClient()
+        self.current_voice = None
+        
+        # Default configuration
+        self.voice_config = {
+            "language_code": "en-US",
+            "name": "en-US-Neural2-F",
+            "ssml_gender": texttospeech.SsmlVoiceGender.FEMALE
+        }
+        
+        # Cache for available voices
+        self._voices = None
+        
+        logger.info("Google Cloud TTS provider initialized")
+    
+    def generate_speech(self, text: str, voice_id: Optional[str] = None, 
+                       speed: float = 1.0) -> Optional[bytes]:
+        """
+        Generate speech using Google Cloud TTS.
+        
+        Args:
+            text (str): Text to convert to speech
+            voice_id (Optional[str]): Voice identifier (e.g., 'en-US-Wavenet-F')
+            speed (float): Speech speed factor
+            
+        Returns:
+            Optional[bytes]: Audio data as bytes or None if generation failed
+        """
+        try:
+            if not text:
+                return None
+            
+            # Set voice if provided
+            if voice_id:
+                self.set_voice(voice_id)
+            
+            logger.debug(f"Generating speech for text: {text[:50]}{'...' if len(text) > 50 else ''}")
+            
+            # Configure input
+            synthesis_input = texttospeech.SynthesisInput(text=text)
+            
+            # Build voice
+            voice = texttospeech.VoiceSelectionParams(
+                language_code=self.voice_config["language_code"],
+                name=self.voice_config["name"],
+                ssml_gender=self.voice_config["ssml_gender"]
+            )
+            
+            # Set audio config
+            audio_config = texttospeech.AudioConfig(
+                audio_encoding=texttospeech.AudioEncoding.LINEAR16,
+                speaking_rate=speed,
+                sample_rate_hertz=24000
+            )
+            
+            # Perform text-to-speech request
+            start_time = time.time()
+            response = self.client.synthesize_speech(
+                input=synthesis_input,
+                voice=voice,
+                audio_config=audio_config
+            )
+            generation_time = time.time() - start_time
+            logger.debug(f"Speech generation took {generation_time:.2f} seconds")
+            
+            # Return the audio content
+            return response.audio_content
+            
+        except google.api_core.exceptions.GoogleAPIError as api_err:
+            logger.error(f"Google API error: {api_err}")
+            return None
+        except Exception as e:
+            logger.error(f"Error generating speech: {e}")
+            logger.debug(traceback.format_exc())
+            return None
+    
+    def get_voices(self) -> Dict[str, Any]:
+        """
+        Get available Google Cloud TTS voices.
+        
+        Returns:
+            Dict[str, Any]: Dictionary containing available voices
+        """
+        if self._voices is None:
+            try:
+                # Fetch voices from API
+                response = self.client.list_voices()
+                
+                # Process the voices into a dict
+                voice_dict = {}
+                
+                for voice in response.voices:
+                    # Skip non-Neural2 or non-Chirp3 voices if you only want those
+                    # if not ('Neural2' in voice.name or 'Chirp3' in voice.name):
+                    #     continue
+                    
+                    # Get the language code (e.g., 'en-US')
+                    language_code = voice.language_codes[0] if voice.language_codes else None
+                    
+                    voice_dict[voice.name] = {
+                        "name": voice.name,
+                        "language": language_code,
+                        "gender": texttospeech.SsmlVoiceGender(voice.ssml_gender).name,
+                        "natural_sample_rate_hertz": voice.natural_sample_rate_hertz
+                    }
+                
+                self._voices = voice_dict
+                
+            except Exception as e:
+                logger.error(f"Error fetching Google voices: {e}")
+                self._voices = {}
+        
+        return {"voices": self._voices}
+    
+    def set_voice(self, voice_id: str) -> bool:
+        """
+        Set the voice to use for TTS.
+        
+        Args:
+            voice_id (str): Voice identifier (e.g., 'en-US-Neural2-F')
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Load available voices if not already loaded
+            if self._voices is None:
+                self.get_voices()
+            
+            # Check if the voice exists
+            if voice_id not in self._voices:
+                logger.warning(f"Voice {voice_id} not found in available voices")
+                return False
+            
+            # Update voice configuration
+            voice_info = self._voices[voice_id]
+            
+            self.voice_config = {
+                "language_code": voice_info["language"],
+                "name": voice_id,
+                "ssml_gender": getattr(texttospeech.SsmlVoiceGender, voice_info["gender"])
+            }
+            
+            self.current_voice = voice_id
+            logger.debug(f"Voice set to {voice_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error setting voice: {e}")
+            return False
+    
+    def health_check(self) -> Dict[str, Any]:
+        """
+        Check if the Google Cloud TTS service is healthy.
+        
+        Returns:
+            Dict[str, Any]: Health status information
+        """
+        try:
+            # Try listing voices to check API connectivity
+            self.client.list_voices()
+            
+            return {
+                "status": "healthy",
+                "engine": "Google Cloud Text-to-Speech",
+                "message": "API connection is functioning normally"
+            }
+        except Exception as e:
+            logger.error(f"Health check failed: {e}")
+            return {
+                "status": "unhealthy",
+                "engine": "Google Cloud Text-to-Speech",
+                "message": str(e)
+            }
+    
+    def get_stream_info(self) -> Tuple[int, int, int]:
+        """
+        Get stream configuration information for audio playback.
+        
+        Returns:
+            Tuple[int, int, int]: Audio format, number of channels, and sample rate
+        """
+        return pyaudio.paInt16, 1, 24000  # 16-bit, mono, 24kHz
+```
+
+### MurfProvider
+
+Let's implement the Murf.ai TTS provider:
+
+```python
+# app/modules/tts/providers/murf_provider.py
+import logging
+import time
+import os
+import traceback
+import tempfile
+import json
+from typing import Dict, Any, Optional, Tuple
+import requests
+
+import pyaudio
+
+from ..base_provider import BaseTTSProvider
+
+logger = logging.getLogger("murf-provider")
+
+class MurfProvider(BaseTTSProvider):
+    """TTS provider using Murf.ai API."""
+    
+    def __init__(self, redis_client=None, **kwargs):
+        """
+        Initialize Murf.ai provider.
+        
+        Args:
+            redis_client: Redis client for caching (not used by this provider)
+            **kwargs: Additional configuration options including:
+                - api_key: Murf.ai API key
+                - api_url: Custom API URL (optional)
+        """
+        self.api_key = kwargs.get("api_key")
+        if not self.api_key:
+            raise ValueError("Murf.ai API key is required")
+        
+        self.api_url = kwargs.get("api_url", "https://api.murf.ai/v1")
+        self.current_voice = None
+        
+        # Default voice configuration
+        self.voice_config = {
+            "voice_id": "en-US-ryan",
+            "style": "neutral",
+            "speed": 1.0,
+            "pitch": 0
+        }
+        
+        # Cache for available voices
+        self._voices = None
+        
+        logger.info("Murf.ai TTS provider initialized")
+    
+    def generate_speech(self, text: str, voice_id: Optional[str] = None, 
+                       speed: float = 1.0) -> Optional[bytes]:
+        """
+        Generate speech using Murf.ai API.
+        
+        Args:
+            text (str): Text to convert to speech
+            voice_id (Optional[str]): Voice identifier
+            speed (float): Speech speed factor
+            
+        Returns:
+            Optional[bytes]: Audio data as bytes or None if generation failed
+        """
+        try:
+            if not text:
+                return None
+            
+            # Set voice if provided
+            if voice_id:
+                self.set_voice(voice_id)
+            
+            logger.debug(f"Generating speech for text: {text[:50]}{'...' if len(text) > 50 else ''}")
+            
+            # Prepare API request
+            headers = {
+                "accept": "application/json",
+                "content-type": "application/json",
+                "x-api-key": self.api_key
+            }
+            
+            payload = {
+                "text": text,
+                "voiceId": self.voice_config["voice_id"],
+                "style": self.voice_config["style"],
+                "rate": speed * self.voice_config["speed"],
+                "pitch": self.voice_config["pitch"],
+                "sampleRate": 24000,
+                "format": "WAV"
+            }
+            
+            # Make API request
+            start_time = time.time()
+            response = requests.post(
+                f"{self.api_url}/speech",
+                headers=headers,
+                json=payload
+            )
+            response.raise_for_status()
+            
+            # Parse response
+            result = response.json()
+            if result.get("status") != "success":
+                logger.error(f"Murf.ai API error: {result.get('message', 'Unknown error')}")
+                return None
+            
+            # Download audio file
+            audio_url = result.get("data", {}).get("audioUrl")
+            if not audio_url:
+                logger.error("No audio URL in response")
+                return None
+            
+            audio_response = requests.get(audio_url)
+            audio_response.raise_for_status()
+            
+            generation_time = time.time() - start_time
+            logger.debug(f"Speech generation took {generation_time:.2f} seconds")
+            
+            return audio_response.content
+            
+        except requests.exceptions.RequestException as req_err:
+            logger.error(f"API request error: {req_err}")
+            return None
+        except Exception as e:
+            logger.error(f"Error generating speech: {e}")
+            logger.debug(traceback.format_exc())
+            return None
+    
+    def get_voices(self) -> Dict[str, Any]:
+        """
+        Get available Murf.ai voices.
+        
+        Returns:
+            Dict[str, Any]: Dictionary containing available voices
+        """
+        if self._voices is None:
+            try:
+                headers = {
+                    "accept": "application/json",
+                    "x-api-key": self.api_key
+                }
+                
+                response = requests.get(
+                    f"{self.api_url}/voices",
+                    headers=headers
+                )
+                response.raise_for_status()
+                
+                result = response.json()
+                if result.get("status") != "success":
+                    logger.error(f"Murf.ai API error: {result.get('message', 'Unknown error')}")
+                    return {"voices": {}}
+                
+                voices_data = result.get("data", {}).get("voices", [])
+                
+                # Process voice data
+                voice_dict = {}
+                for voice in voices_data:
+                    voice_id = voice.get("voiceId")
+                    if not voice_id:
+                        continue
+                    
+                    voice_dict[voice_id] = {
+                        "name": voice.get("name", voice_id),
+                        "language": voice.get("language", "unknown"),
+                        "gender": voice.get("gender", "unknown"),
+                        "accent": voice.get("accent", "unknown"),
+                        "styles": voice.get("styles", [])
+                    }
+                
+                self._voices = voice_dict
+                
+            except Exception as e:
+                logger.error(f"Error fetching Murf.ai voices: {e}")
+                self._voices = {}
+        
+        return {"voices": self._voices}
+    
+    def set_voice(self, voice_id: str) -> bool:
+        """
+        Set the voice to use for TTS.
+        
+        Args:
+            voice_id (str): Voice identifier
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Parse voice ID format (can include style): "en-US-ryan:excited"
+            parts = voice_id.split(":")
+            base_voice_id = parts[0]
+            style = parts[1] if len(parts) > 1 else "neutral"
+            
+            # Load voices if not already loaded
+            if self._voices is None:
+                self.get_voices()
+            
+            # Check if the voice exists
+            if base_voice_id not in self._voices:
+                logger.warning(f"Voice {base_voice_id} not found in available voices")
+                return False
+            
+            # Check if the style is valid
+            voice_info = self._voices[base_voice_id]
+            styles = voice_info.get("styles", ["neutral"])
+            
+            if style not in styles:
+                logger.warning(f"Style {style} not available for voice {base_voice_id}")
+                style = "neutral"  # Default to neutral
+            
+            # Update voice configuration
+            self.voice_config["voice_id"] = base_voice_id
+            self.voice_config["style"] = style
+            
+            self.current_voice = voice_id
+            logger.debug(f"Voice set to {voice_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error setting voice: {e}")
+            return False
+    
+    def health_check(self) -> Dict[str, Any]:
+        """
+        Check if the Murf.ai service is healthy.
+        
+        Returns:
+            Dict[str, Any]: Health status information
+        """
+        try:
+            # Try to get voices list to check API connectivity
+            headers = {
+                "accept": "application/json",
+                "x-api-key": self.api_key
+            }
+            
+            response = requests.get(
+                f"{self.api_url}/voices",
+                headers=headers
+            )
+            response.raise_for_status()
+            
+            result = response.json()
+            if result.get("status") != "success":
+                return {
+                    "status": "unhealthy",
+                    "engine": "Murf.ai",
+                    "message": result.get("message", "API returned error status")
+                }
+            
+            return {
+                "status": "healthy",
+                "engine": "Murf.ai",
+                "message": "API connection is functioning normally"
+            }
+        except Exception as e:
+            logger.error(f"Health check failed: {e}")
+            return {
+                "status": "unhealthy",
+                "engine": "Murf.ai",
+                "message": str(e)
+            }
+    
+    def get_stream_info(self) -> Tuple[int, int, int]:
+        """
+        Get stream configuration information for audio playback.
+        
+        Returns:
+            Tuple[int, int, int]: Audio format, number of channels, and sample rate
+        """
+        return pyaudio.paInt16, 1, 24000  # 16-bit, mono, 24kHz
+```
+
+### TelnyxProvider
+
+Now, let's implement the Telnyx TTS provider. Telnyx doesn't have a direct TTS API, but we'll create a provider that works with Telnyx's media services:
+
+```python
+# app/modules/tts/providers/telnyx_provider.py
+import logging
+import time
+import os
+import traceback
+import tempfile
+import json
+import uuid
+from typing import Dict, Any, Optional, Tuple
+import requests
+
+import pyaudio
+
+from ..base_provider import BaseTTSProvider
+
+logger = logging.getLogger("telnyx-provider")
+
+class TelnyxProvider(BaseTTSProvider):
+    """
+    TTS provider that works with Telnyx TTS features.
+    
+    This is a wrapper provider that can use Telnyx's audio 
+    services. Telnyx doesn't have a dedicated TTS API, so this
+    provider works with their media handling features.
+    """
+    
+    def __init__(self, redis_client=None, **kwargs):
+        """
+        Initialize Telnyx provider.
+        
+        Args:
+            redis_client: Redis client for caching (not used by this provider)
+            **kwargs: Additional configuration options including:
+                - api_key: Telnyx API key
+                - base_provider: Base TTS provider to use
+        """
+        self.api_key = kwargs.get("api_key")
+        if not self.api_key:
+            raise ValueError("Telnyx API key is required")
+        
+        # This provider needs to use another provider for the actual TTS
+        base_provider_type = kwargs.get("base_provider", "kokoro")
+        base_provider_config = kwargs.get("base_provider_config", {})
+        
+        # Import provider factory here to avoid circular imports
+        from ..provider_factory import TTSProviderFactory
+        
+        self.base_provider = TTSProviderFactory.create_provider(
+            base_provider_type, redis_client, base_provider_config
+        )
+        
+        self.current_voice = None
+        
+        # Storage bucket ID for uploads
+        self.bucket_id = kwargs.get("bucket_id", "")
+        
+        logger.info(f"Telnyx TTS provider initialized with base provider: {base_provider_type}")
+    
+    def generate_speech(self, text: str, voice_id: Optional[str] = None, 
+                       speed: float = 1.0) -> Optional[bytes]:
+        """
+        Generate speech using the base provider.
+        
+        Args:
+            text (str): Text to convert to speech
+            voice_id (Optional[str]): Voice identifier
+            speed (float): Speech speed factor
+            
+        Returns:
+            Optional[bytes]: Audio data as bytes or None if generation failed
+        """
+        # Simply delegate to the base provider
+        if voice_id:
+            self.set_voice(voice_id)
+        
+        return self.base_provider.generate_speech(text, None, speed)
+    
+    def get_voices(self) -> Dict[str, Any]:
+        """
+        Get available voices from the base provider.
+        
+        Returns:
+            Dict[str, Any]: Dictionary containing available voices
+        """
+        # Delegate to base provider
+        return self.base_provider.get_voices()
+    
+    def set_voice(self, voice_id: str) -> bool:
+        """
+        Set the voice to use for TTS.
+        
+        Args:
+            voice_id (str): Voice identifier
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        result = self.base_provider.set_voice(voice_id)
+        if result:
+            self.current_voice = voice_id
+        return result
+    
+    def health_check(self) -> Dict[str, Any]:
+        """
+        Check if the Telnyx service is healthy.
+        
+        Returns:
+            Dict[str, Any]: Health status information
+        """
+        try:
+            # Check base provider health
+            base_health = self.base_provider.health_check()
+            
+            # Check Telnyx API connection
+            headers = {"Authorization": f"Bearer {self.api_key}"}
+            response = requests.get(
+                "https://api.telnyx.com/v2/files?page[size]=1",
+                headers=headers
+            )
+            response.raise_for_status()
+            
+            status = "healthy" if base_health.get("status") == "healthy" else "degraded"
+            
+            return {
+                "status": status,
+                "engine": f"Telnyx with {self.base_provider.__class__.__name__}",
+                "base_provider_health": base_health,
+                "telnyx_api": "connected"
+            }
+        except Exception as e:
+            logger.error(f"Health check failed: {e}")
+            return {
+                "status": "unhealthy",
+                "engine": f"Telnyx with {self.base_provider.__class__.__name__}",
+                "base_provider_health": self.base_provider.health_check(),
+                "message": str(e)
+            }
+    
+    def get_stream_info(self) -> Tuple[int, int, int]:
+        """
+        Get stream configuration information for audio playback.
+        
+        Returns:
+            Tuple[int, int, int]: Audio format, number of channels, and sample rate
+        """
+        # Delegate to base provider
+        return self.base_provider.get_stream_info()
+    
+    def upload_to_storage(self, file_data: bytes, filename: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """
+        Upload a file to Telnyx Storage.
+        
+        Args:
+            file_data (bytes): The file data to upload
+            filename (str, optional): Filename to use, will generate one if not provided
+            
+        Returns:
+            Optional[Dict[str, Any]]: Response with URL if successful, None otherwise
+        """
+        if filename is None:
+            filename = f"{uuid.uuid4()}.wav"
+            
+        try:
+            # Create multipart form data for the file upload
+            files = {
+                'file': (filename, file_data, 'audio/wav')
+            }
+            
+            # Set up the data payload
+            data = {
+                'public': 'true',  # Make the file publicly accessible
+            }
+            
+            # Include bucket ID if provided
+            if self.bucket_id:
+                data['bucket_id'] = self.bucket_id
+            
+            # Set up headers with authentication
+            headers = {
+                'Authorization': f'Bearer {self.api_key}'
+            }
+            
+            # Upload the file to Telnyx Storage
+            response = requests.post(
+                'https://api.telnyx.com/v2/files',
+                headers=headers,
+                files=files,
+                data=data
+            )
+            
+            # Check for successful upload
+            if response.status_code == 200 or response.status_code == 201:
+                response_data = response.json()
+                public_url = response_data.get('data', {}).get('public_url')
+                file_id = response_data.get('data', {}).get('id')
+                
+                logger.info(f"File uploaded successfully. File ID: {file_id}")
+                return {
+                    "url": public_url,
+                    "id": file_id
+                }
+            else:
+                logger.error(f"Failed to upload file to Telnyx Storage: {response.status_code} - {response.text}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error uploading to Telnyx Storage: {e}")
+            return None
+    
+    def generate_and_upload(self, text: str, voice_id: Optional[str] = None,
+                           speed: float = 1.0) -> Optional[Dict[str, Any]]:
+        """
+        Generate speech and upload to Telnyx storage.
+        
+        Args:
+            text (str): Text to convert to speech
+            voice_id (Optional[str]): Voice identifier
+            speed (float): Speech speed factor
+            
+        Returns:
+            Optional[Dict[str, Any]]: Upload information or None if failed
+        """
+        # Generate audio
+        audio_data = self.generate_speech(text, voice_id, speed)
+        if not audio_data:
+            return None
+        
+        # Upload to Telnyx
+        return self.upload_to_storage(audio_data)
+```
+
+### PiperProvider
+
+Here's the implementation for the Piper TTS provider:
+
+```python
+# app/modules/tts/providers/piper_provider.py
+import logging
+import subprocess
+import os
+import time
+import traceback
+import tempfile
+import json
+from typing import Dict, Any, Optional, Tuple
+import shutil
+
+import pyaudio
+
+from ..base_provider import BaseTTSProvider
+
+logger = logging.getLogger("piper-provider")
+
+class PiperProvider(BaseTTSProvider):
+    """TTS provider using Piper TTS."""
+    
+    def __init__(self, redis_client=None, **kwargs):
+        """
+        Initialize Piper TTS provider.
+        
+        Args:
+            redis_client: Redis client for caching (not used by this provider)
+            **kwargs: Additional configuration options including:
+                - piper_path: Path to piper executable
+                - models_dir: Directory containing Piper model files
+                - default_model: Default model to use
+        """
+        self.piper_path = kwargs.get("piper_path", "/usr/local/bin/piper")
+        self.models_dir = kwargs.get("models_dir", "/path/to/piper/models")
+        self.default_model = kwargs.get("default_model", "en_US-lessac-medium")
+        
+        self.current_voice = self.default_model
+        
+        # Check if piper exists
+        if not os.path.exists(self.piper_path) and not shutil.which("piper"):
+            if shutil.which("piper"):
+                # Use piper from PATH
+                self.piper_path = shutil.which("piper")
+            else:
+                logger.warning(f"Piper executable not found at {self.piper_path}")
+        
+        # Cache for available voices
+        self._voices = None
+        
+        logger.info("Piper TTS provider initialized")
+    
+    def generate_speech(self, text: str, voice_id: Optional[str] = None, 
+                       speed: float = 1.0) -> Optional[bytes]:
+        """
+        Generate speech using Piper TTS.
+        
+        Args:
+            text (str): Text to convert to speech
+            voice_id (Optional[str]): Voice identifier (model name)
+            speed (float): Speech speed factor
+            
+        Returns:
+            Optional[bytes]: Audio data as bytes or None if generation failed
+        """
+        try:
+            if not text:
+                return None
+            
+            # Set voice if provided
+            if voice_id:
+                self.set_voice(voice_id)
+            
+            logger.debug(f"Generating speech for text: {text[:50]}{'...' if len(text) > 50 else ''}")
+            
+            # Determine model path
+            model_name = self.current_voice
+            model_path = os.path.join(self.models_dir, f"{model_name}.onnx")
+            
+            # Check if model exists
+            if not os.path.exists(model_path):
+                logger.error(f"Model file not found: {model_path}")
+                return None
+            
+            # Create temporary files for input text and output audio
+            with tempfile.NamedTemporaryFile(mode='w+', suffix='.txt', delete=False) as text_file:
+                text_file.write(text)
+                text_path = text_file.name
+            
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as audio_file:
+                audio_path = audio_file.name
+            
+            # Build piper command
+            cmd = [
+                self.piper_path,
+                "--model", model_path,
+                "--output_file", audio_path,
+                "--length-scale", str(1.0 / speed),  # Inverse of speed
+                "--json-output"
+            ]
+            
+            # Run piper process
+            start_time = time.time()
+            process = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            
+            # Send text to piper
+            stdout, stderr = process.communicate(text)
+            
+            if process.returncode != 0:
+                logger.error(f"Piper failed with code {process.returncode}: {stderr}")
+                return None
+                
+            generation_time = time.time() - start_time
+            logger.debug(f"Speech generation took {generation_time:.2f} seconds")
+            
+            # Read the generated audio file
+            with open(audio_path, 'rb') as f:
+                audio_data = f.read()
+            
+            # Clean up temporary files
+            os.unlink(text_path)
+            os.unlink(audio_path)
+            
+            return audio_data
+            
+        except Exception as e:
+            logger.error(f"Error generating speech: {e}")
+            logger.debug(traceback.format_exc())
+            return None
+    
+    def get_voices(self) -> Dict[str, Any]:
+        """
+        Get available Piper voices (models).
+        
+        Returns:
+            Dict[str, Any]: Dictionary containing available voices
+        """
+        if self._voices is None:
+            self._voices = {}
+            
+            try:
+                # Find all .onnx model files in the models directory
+                if os.path.exists(self.models_dir):
+                    for filename in os.listdir(self.models_dir):
+                        if filename.endswith(".onnx"):
+                            model_name = filename[:-5]  # Remove .onnx extension
+                            
+                            # Try to parse model name into language and speaker
+                            parts = model_name.split("-")
+                            if len(parts) >= 2:
+                                language = parts[0]
+                                speaker = "-".join(parts[1:])
+                            else:
+                                language = "unknown"
+                                speaker = model_name
+                            
+                            self._voices[model_name] = {
+                                "name": model_name,
+                                "language": language,
+                                "speaker": speaker
+                            }
+            except Exception as e:
+                logger.error(f"Error scanning for Piper models: {e}")
+        
+        return {"voices": self._voices}
+    
+    def set_voice(self, voice_id: str) -> bool:
+        """
+        Set the voice (model) to use for TTS.
+        
+        Args:
+            voice_id (str): Voice identifier (model name)
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Check if the model file exists
+            model_path = os.path.join(self.models_dir, f"{voice_id}.onnx")
+            if not os.path.exists(model_path):
+                logger.warning(f"Model file not found: {model_path}")
+                return False
+            
+            self.current_voice = voice_id
+            logger.debug(f"Voice set to {voice_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Error setting voice: {e}")
+            return False
+    
+    def health_check(self) -> Dict[str, Any]:
+        """
+        Check if the Piper TTS system is healthy.
+        
+        Returns:
+            Dict[str, Any]: Health status information
+        """
+        try:
+            # Check if piper executable exists
+            if not os.path.exists(self.piper_path) and not shutil.which("piper"):
+                return {
+                    "status": "unhealthy",
+                    "engine": "Piper TTS",
+                    "message": f"Piper executable not found at {self.piper_path}"
+                }
+            
+            # Check if models directory exists and contains model files
+            if not os.path.exists(self.models_dir):
+                return {
+                    "status": "unhealthy",
+                    "engine": "Piper TTS",
+                    "message": f"Models directory not found: {self.models_dir}"
+                }
+            
+            # Check if at least one model file exists
+            model_files = [f for f in os.listdir(self.models_dir) if f.endswith(".onnx")]
+            if not model_files:
+                return {
+                    "status": "unhealthy",
+                    "engine": "Piper TTS",
+                    "message": f"No model files found in {self.models_dir}"
+                }
+            
+            # Test voice generation
+            test_result = self.generate_speech("Test")
+            if test_result is None:
+                return {
+                    "status": "degraded",
+                    "engine": "Piper TTS",
+                    "message": "Speech generation test failed"
+                }
+            
+            return {
+                "status": "healthy",
+                "engine": "Piper TTS",
+                "message": "Engine is functioning normally",
+                "model_count": len(model_files)
+            }
+        except Exception as e:
+            logger.error(f"Health check failed: {e}")
+            return {
+                "status": "unhealthy",
+                "engine": "Piper TTS",
+                "message": str(e)
+            }
+    
+    def get_stream_info(self) -> Tuple[int, int, int]:
+        """
+        Get stream configuration information for audio playback.
+        
+        Returns:
+            Tuple[int, int, int]: Audio format, number of channels, and sample rate
+        """
+        return pyaudio.paInt16, 1, 24000  # 16-bit, mono, 24kHz
+```
+
+### ElevenlabsProvider
+
+Let's implement the ElevenLabs provider:
+
+```python
+# app/modules/tts/providers/elevenlabs_provider.py
+import logging
+import time
+import os
+import traceback
+import tempfile
+import json
+from typing import Dict, Any, Optional, Tuple
+import requests
+from urllib.parse import urljoin
+
+import pyaudio
+
+from ..base_provider import BaseTTSProvider
+
+logger = logging.getLogger("elevenlabs-provider")
+
+class ElevenlabsProvider(BaseTTSProvider):
+    """TTS provider using ElevenLabs API."""
+    
+    def __init__(self, redis_client=None, **kwargs):
+        """
+        Initialize ElevenLabs provider.
+        
+        Args:
+            redis_client: Redis client for caching (not used by this provider)
+            **kwargs: Additional configuration options including:
+                - api_key: ElevenLabs API key
+                - model_id: ElevenLabs model ID (optional)
+        """
+        self.api_key = kwargs.get("api_key")
+        if not self.api_key:
+            raise ValueError("ElevenLabs API key is required")
+        
+        self.model_id = kwargs.get("model_id", "eleven_multilingual_v2")
+        self.current_voice = None
+        
+        # Default voice ID (Bella)
+        self.voice_id = "EXAVITQu4vr4xnSDxMaL"
+        
+        # Default voice settings
+        self.voice_settings = {
+            "stability": 0.5,
+            "similarity_boost": 0.75,
+            "style": 0.0,
+            "use_speaker_boost": True
+        }
+        
+        # Base API URL
+        self.api_base_url = "https://api.elevenlabs.io/v1/"
+        
+        # Cache for available voices
+        self._voices = None
+        
+        logger.info("ElevenLabs TTS provider initialized")
+    
+    def generate_speech(self, text: str, voice_id: Optional[str] = None, 
+                       speed: float = 1.0) -> Optional[bytes]:
+        """
+        Generate speech using ElevenLabs API.
+        
+        Args:
+            text (str): Text to convert to speech
+            voice_id (Optional[str]): Voice identifier
+            speed (float): Speech speed factor
+            
+        Returns:
+            Optional[bytes]: Audio data as bytes or None if generation failed
+        """
+        try:
+            if not text:
+                return None
+            
+            # Set voice if provided
+            if voice_id:
+                self.set_voice(voice_id)
+            
+            logger.debug(f"Generating speech for text: {text[:50]}{'...' if len(text) > 50 else ''}")
+            
+            # Prepare API request
+            headers = {
+                "Accept": "audio/wav",
+                "xi-api-key": self.api_key,
+                "Content-Type": "application/json"
+            }
+            
+            payload = {
+                "text": text,
+                "model_id": self.model_id,
+                "voice_settings": {
+                    **self.voice_settings,
+                    "speaking_rate": speed
+                }
+            }
+            
+            # API endpoint
+            url = urljoin(self.api_base_url, f"text-to-speech/{self.voice_id}")
+            
+            # Make API request
+            start_time = time.time()
+            response = requests.post(
+                url,
+                json=payload,
+                headers=headers
+            )
+            
+            if response.status_code != 200:
+                logger.error(f"ElevenLabs API error: {response.status_code} - {response.text}")
+                return None
+            
+            generation_time = time.time() - start_time
+            logger.debug(f"Speech generation took {generation_time:.2f} seconds")
+            
+            return response.content
+            
+        except requests.exceptions.RequestException as req_err:
+            logger.error(f"API request error: {req_err}")
+            return None
+        except Exception as e:
+            logger.error(f"Error generating speech: {e}")
+            logger.debug(traceback.format_exc())
+            return None
+    
+    def get_voices(self) -> Dict[str, Any]:
+        """
+        Get available ElevenLabs voices.
+        
+        Returns:
+            Dict[str, Any]: Dictionary containing available voices
+        """
+        if self._voices is None:
+            try:
+                headers = {
+                    "Accept": "application/json",
+                    "xi-api-key": self.api_key
+                }
+                
+                url = urljoin(self.api_base_url, "voices")
+                
+                response = requests.get(url, headers=headers)
+                response.raise_for_status()
+                
+                voices_data = response.json().get("voices", [])
+                
+                # Process voice data
+                voice_dict = {}
+                for voice in voices_data:
+                    voice_id = voice.get("voice_id")
+                    if not voice_id:
+                        continue
+                    
+                    # Extract labels
+                    labels = {}
+                    for label in voice.get("labels", {}).items():
+                        labels[label[0]] = label[1]
+                    
+                    voice_dict[voice_id] = {
+                        "name": voice.get("name", voice_id),
+                        "description": voice.get("description", ""),
+                        "labels": labels,
+                        "preview_url": voice.get("preview_url")
+                    }
+                
+                self._voices = voice_dict
+                
+            except Exception as e:
+                logger.error(f"Error fetching ElevenLabs voices: {e}")
+                self._voices = {}
+        
+        return {"voices": self._voices}
+    
+    def set_voice(self, voice_id: str) -> bool:
+        """
+        Set the voice to use for TTS.
+        
+        Args:
+            voice_id (str): Voice identifier
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Load voices if not already loaded
+            if self._voices is None:
+                self.get_voices()
+            
+            # Check if the voice exists
+            if voice_id not in self._voices:
+                logger.warning(f"Voice {voice_id} not found in available voices")
+                return False
+            
+            # Update voice ID
+            self.voice_id = voice_id
+            self.current_voice = voice_id
+            
+            logger.debug(f"Voice set to {voice_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error setting voice: {e}")
+            return False
+    
+    def health_check(self) -> Dict[str, Any]:
+        """
+        Check if the ElevenLabs service is healthy.
+        
+        Returns:
+            Dict[str, Any]: Health status information
+        """
+        try:
+            # Try to get user info to check API connectivity
+            headers = {
+                "Accept": "application/json",
+                "xi-api-key": self.api_key
+            }
+            
+            url = urljoin(self.api_base_url, "user")
+            
+            response = requests.get(url, headers=headers)
+            response.raise_for_status()
+            
+            user_data = response.json()
+            
+            # Check subscription status
+            subscription = user_data.get("subscription", {})
+            tier = subscription.get("tier", "unknown")
+            character_limit = subscription.get("character_limit", 0)
+            character_count = subscription.get("character_count", 0)
+            
+            remaining_characters = character_limit - character_count
+            
+            status = "healthy"
+            message = "API connection is functioning normally"
+            
+            # Check if approaching character limit
+            if remaining_characters < 1000 and character_limit > 0:
+                status = "degraded"
+                message = f"API working but only {remaining_characters} characters remaining"
+            
+            return {
+                "status": status,
+                "engine": "ElevenLabs",
+                "message": message,
+                "tier": tier,
+                "remaining_characters": remaining_characters
+            }
+        except Exception as e:
+            logger.error(f"Health check failed: {e}")
+            return {
+                "status": "unhealthy",
+                "engine": "ElevenLabs",
+                "message": str(e)
+            }
+    
+    def get_stream_info(self) -> Tuple[int, int, int]:
+        """
+        Get stream configuration information for audio playback.
+        
+        Returns:
+            Tuple[int, int, int]: Audio format, number of channels, and sample rate
+        """
+        return pyaudio.paInt16, 1, 24000  # 16-bit, mono, 24kHz
+```
+
+### AzureProvider
+
+Finally, let's implement the Azure provider:
+
+```python
+# app/modules/tts/providers/azure_provider.py
+import logging
+import time
+import os
+import traceback
+import tempfile
+import json
+import re
+from typing import Dict, Any, Optional, Tuple
+
+import pyaudio
+import azure.cognitiveservices.speech as speechsdk
+
+from ..base_provider import BaseTTSProvider
+
+logger = logging.getLogger("azure-provider")
+
+class AzureProvider(BaseTTSProvider):
+    """TTS provider using Azure Speech Services."""
+    
+    def __init__(self, redis_client=None, **kwargs):
+        """
+        Initialize Azure Speech Services provider.
+        
+        Args:
+            redis_client: Redis client for caching (not used by this provider)
+            **kwargs: Additional configuration options including:
+                - speech_key: Azure Speech API key
+                - service_region: Azure service region
+        """
+        self.speech_key = kwargs.get("speech_key")
+        self.service_region = kwargs.get("service_region")
+        
+        if not self.speech_key:
+            raise ValueError("Azure Speech API key is required")
+        
+        if not self.service_region:
+            raise ValueError("Azure service region is required")
+        
+        # Initialize speech config
+        self.speech_config = speechsdk.SpeechConfig(
+            subscription=self.speech_key,
+            region=self.service_region
+        )
+        
+        # Default voice
+        self.speech_config.speech_synthesis_voice_name = "en-US-JennyNeural"
+        self.current_voice = "en-US-JennyNeural"
+        
+        # Set output format to PCM 16kHz 16-bit mono
+        self.speech_config.set_speech_synthesis_output_format(
+            speechsdk.SpeechSynthesisOutputFormat.Riff24Khz16BitMonoPcm
+        )
+        
+        # Cache for available voices
+        self._voices = None
+        
+        logger.info("Azure Speech Services provider initialized")
+    
+    def generate_speech(self, text: str, voice_id: Optional[str] = None, 
+                       speed: float = 1.0) -> Optional[bytes]:
+        """
+        Generate speech using Azure Speech Services.
+        
+        Args:
+            text (str): Text to convert to speech
+            voice_id (Optional[str]): Voice identifier
+            speed (float): Speech speed factor
+            
+        Returns:
+            Optional[bytes]: Audio data as bytes or None if generation failed
+        """
+        try:
+            if not text:
+                return None
+            
+            # Set voice if provided
+            if voice_id:
+                self.set_voice(voice_id)
+            
+            logger.debug(f"Generating speech for text: {text[:50]}{'...' if len(text) > 50 else ''}")
+            
+            # Apply speech rate
+            ssml_text = f"""
+            <speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" 
+                   xmlns:mstts="http://www.w3.org/2001/mstts" xml:lang="en-US">
+                <voice name="{self.current_voice}">
+                    <prosody rate="{speed}">
+                        {text}
+                    </prosody>
+                </voice>
+            </speak>
+            """
+            
+            # Create speech synthesizer
+            synthesizer = speechsdk.SpeechSynthesizer(
+                speech_config=self.speech_config,
+                audio_config=None  # Use memory output
+            )
+            
+            # Start time measurement
+            start_time = time.time()
+            
+            # Generate speech
+            result = synthesizer.speak_ssml_async(ssml_text).get()
+            
+            generation_time = time.time() - start_time
+            logger.debug(f"Speech generation took {generation_time:.2f} seconds")
+            
+            # Check if synthesis was successful
+            if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
+                return result.audio_data
+            else:
+                error_details = result.properties.get(
+                    speechsdk.PropertyId.SpeechServiceResponse_JsonErrorDetails, 
+                    ""
+                )
+                logger.error(f"Speech synthesis failed: {result.reason} - {error_details}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error generating speech: {e}")
+            logger.debug(traceback.format_exc())
+            return None
+    
+    def get_voices(self) -> Dict[str, Any]:
+        """
+        Get available Azure Speech Services voices.
+        
+        Returns:
+            Dict[str, Any]: Dictionary containing available voices
+        """
+        if self._voices is None:
+            try:
+                # Create speech synthesizer
+                synthesizer = speechsdk.SpeechSynthesizer(
+                    speech_config=self.speech_config,
+                    audio_config=None
+                )
+                
+                # Get voice list
+                result = synthesizer.get_voices_async().get()
+                
+                if result.reason == speechsdk.ResultReason.VoicesListRetrieved:
+                    # Process voice data
+                    voice_dict = {}
+                    for voice in result.voices:
+                        voice_id = voice.name
+                        
+                        # Parse locale and name
+                        match = re.match(r'([a-z]{2}-[A-Z]{2})-(.+)Neural', voice_id)
+                        if match:
+                            locale = match.group(1)
+                            name = match.group(2)
+                        else:
+                            locale = voice.locale
+                            name = voice_id
+                        
+                        voice_dict[voice_id] = {
+                            "name": name,
+                            "locale": locale,
+                            "gender": voice.gender.name,
+                            "voice_type": voice.voice_type.name,
+                            "sample_rate": voice.sample_rate
+                        }
+                    
+                    self._voices = voice_dict
+                else:
+                    logger.error(f"Failed to retrieve voices: {result.reason}")
+                    self._voices = {}
+                
+            except Exception as e:
+                logger.error(f"Error fetching Azure voices: {e}")
+                self._voices = {}
+        
+        return {"voices": self._voices}
+    
+    def set_voice(self, voice_id: str) -> bool:
+        """
+        Set the voice to use for TTS.
+        
+        Args:
+            voice_id (str): Voice identifier
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Load voices if not already loaded
+            if self._voices is None:
+                self.get_voices()
+            
+            # Check if the voice exists
+            if voice_id not in self._voices and voice_id in self._voices.values():
+                # Maybe it's a voice name, try to find it
+                for v_id, v_info in self._voices.items():
+                    if v_info.get("name") == voice_id:
+                        voice_id = v_id
+                        break
+            
+            if voice_id not in self._voices:
+                logger.warning(f"Voice {voice_id} not found in available voices")
+                return False
+            
+            # Update voice
+            self.speech_config.speech_synthesis_voice_name = voice_id
+            self.current_voice = voice_id
+            
+            logger.debug(f"Voice set to {voice_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error setting voice: {e}")
+            return False
+    
+    def health_check(self) -> Dict[str, Any]:
+        """
+        Check if the Azure Speech Services is healthy.
+        
+        Returns:
+            Dict[str, Any]: Health status information
+        """
+        try:
+            # Try to get voice list to check API connectivity
+            synthesizer = speechsdk.SpeechSynthesizer(
+                speech_config=self.speech_config,
+                audio_config=None
+            )
+            
+            result = synthesizer.get_voices_async().get()
+            
+            if result.reason == speechsdk.ResultReason.VoicesListRetrieved:
+                return {
+                    "status": "healthy",
+                    "engine": "Azure Speech Services",
+                    "message": "API connection is functioning normally",
+                    "voice_count": len(result.voices)
+                }
+            else:
+                return {
+                    "status": "unhealthy",
+                    "engine": "Azure Speech Services",
+                    "message": f"Failed to retrieve voices: {result.reason}"
+                }
+        except Exception as e:
+            logger.error(f"Health check failed: {e}")
+            return {
+                "status": "unhealthy",
+                "engine": "Azure Speech Services",
+                "message": str(e)
+            }
+    
+    def get_stream_info(self) -> Tuple[int, int, int]:
+        """
+        Get stream configuration information for audio playback.
+        
+        Returns:
+            Tuple[int, int, int]: Audio format, number of channels, and sample rate
+        """
+        return pyaudio.paInt16, 1, 24000  # 16-bit, mono, 24kHz
+```
+
+## Integration with Morning Coffee
+
+### TTS Service Initialization
+
+Now, let's integrate the TTS Service into the Morning Coffee application by updating the `app.py` file to initialize and use the new TTS service:
+
+```python
+# app/app.py (updated to use TTS Service)
+
+# Add this to imports
+from modules.tts.tts_service import TTSService
+
+# In the create_app function, replace the TTS client initialization
+def create_app(config_obj=None):
+    # ... existing code ...
+    
+    # Initialize service clients
+    redis_store = RedisStore(
+        host=app_config.REDIS_HOST,
+        port=app_config.REDIS_PORT,
+        password=app_config.REDIS_PASSWORD,
+        db=app_config.REDIS_DB
+    )
+    
+    # Initialize TTS service
+    tts_config = {
+        "default_provider": app_config.TTS_PROVIDER,
+        "cache_enabled": app_config.TTS_CACHE_ENABLED,
+        "cache_ttl": app_config.TTS_CACHE_TTL,
+        "provider_config": {
+            "kokoro": {},
+            "google": {
+                "credentials_path": app_config.GOOGLE_CREDENTIALS_PATH,
+                "project_id": app_config.GOOGLE_PROJECT_ID
+            },
+            "murf": {
+                "api_key": app_config.MURF_API_KEY
+            },
+            "telnyx": {
+                "api_key": app_config.TELNYX_API_KEY,
+                "base_provider": "kokoro",
+                "bucket_id": app_config.TELNYX_STORAGE_BUCKET_ID
+            },
+            "piper": {
+                "piper_path": app_config.PIPER_PATH,
+                "models_dir": app_config.PIPER_MODELS_DIR,
+                "default_model": app_config.PIPER_DEFAULT_MODEL
+            },
+            "elevenlabs": {
+                "api_key": app_config.ELEVENLABS_API_KEY,
+                "model_id": app_config.ELEVENLABS_MODEL_ID
+            },
+            "azure": {
+                "speech_key": app_config.AZURE_SPEECH_KEY,
+                "service_region": app_config.AZURE_SPEECH_REGION
+            }
+        },
+        "voice_mapping": app_config.TTS_VOICE_MAPPING
+    }
+    
+    # Initialize service handlers
+    telnyx_handler = TelnyxHandler(
+        api_key=app_config.TELNYX_API_KEY,
+        phone_number=app_config.TELNYX_PHONE_NUMBER,
+        messaging_profile_id=app_config.TELNYX_MESSAGING_PROFILE_ID,
+        app_id=app_config.TELNYX_APP_ID
+    )
+    
+    # Initialize the TTS service
+    tts_service = TTSService(
+        redis_client=redis_store.redis,
+        telnyx_handler=telnyx_handler,
+        config=tts_config
+    )
+    
+    # Other service handlers
+    assemblyai_handler = AssemblyAIHandler(
+        api_key=app_config.ASSEMBLYAI_API_KEY
+    )
+    
+    llm_handler = LLMHandler(
+        llm_type=app_config.LLM_TYPE,
+        api_key=app_config.LLM_API_KEY,
+        model=app_config.LLM_MODEL,
+        endpoint=app_config.LLM_ENDPOINT
+    )
+    
+    # Register blueprints
+    app.register_blueprint(api, url_prefix='/api')
+    app.register_blueprint(webhooks, url_prefix='/webhooks')
+    
+    # Store service clients in app config for access in routes
+    app.config['REDIS_STORE'] = redis_store
+    app.config['TTS_SERVICE'] = tts_service  # Store TTS service
+    app.config['TELNYX_HANDLER'] = telnyx_handler
+    app.config['ASSEMBLYAI_HANDLER'] = assemblyai_handler
+    app.config['LLM_HANDLER'] = llm_handler
+    
+    # ... rest of the function ...
+```
+
+Then, update the config module to include the new TTS configuration values:
+
+```python
+# app/config.py (updated with new TTS configuration)
+
+# In the Config class, add these new properties:
+def __init__(self):
+    # ... existing code ...
+    
+    # TTS configuration
+    self.TTS_PROVIDER = os.environ.get('TTS_PROVIDER', 'kokoro')
+    self.TTS_CACHE_ENABLED = os.environ.get('TTS_CACHE_ENABLED', 'true').lower() == 'true'
+    self.TTS_CACHE_TTL = int(os.environ.get('TTS_CACHE_TTL', 86400))  # 24 hours default
+    
+    # Voice mapping configuration
+    self.TTS_VOICE_MAPPING = self._load_voice_mapping()
+    
+    # Google TTS configuration
+    self.GOOGLE_CREDENTIALS_PATH = os.environ.get('GOOGLE_CREDENTIALS_PATH', '')
+    self.GOOGLE_PROJECT_ID = os.environ.get('GOOGLE_PROJECT_ID', '')
+    
+    # Murf.ai configuration
+    self.MURF_API_KEY = os.environ.get('MURF_API_KEY', '')
+    
+    # ElevenLabs configuration
+    self.ELEVENLABS_API_KEY = os.environ.get('ELEVENLABS_API_KEY', '')
+    self.ELEVENLABS_MODEL_ID = os.environ.get('ELEVENLABS_MODEL_ID', 'eleven_multilingual_v2')
+    
+    # Azure Speech Services configuration
+    self.AZURE_SPEECH_KEY = os.environ.get('AZURE_SPEECH_KEY', '')
+    self.AZURE_SPEECH_REGION = os.environ.get('AZURE_SPEECH_REGION', '')
+    
+    # Piper configuration
+    self.PIPER_PATH = os.environ.get('PIPER_PATH', '/usr/local/bin/piper')
+    self.PIPER_MODELS_DIR = os.environ.get('PIPER_MODELS_DIR', '/app/piper_models')
+    self.PIPER_DEFAULT_MODEL = os.environ.get('PIPER_DEFAULT_MODEL', 'en_US-lessac-medium')
+
+# Add this method to load voice mapping:
+def _load_voice_mapping(self) -> Dict[str, Dict[str, str]]:
+    """
+    Load voice mapping from environment or default mapping.
+    
+    Returns:
+        Dict[str, Dict[str, str]]: Voice mapping dictionary
+    """
+    try:
+        mapping_json = os.environ.get('TTS_VOICE_MAPPING', '')
+        if mapping_json:
+            return json.loads(mapping_json)
+    except Exception as e:
+        logger.error(f"Error loading voice mapping: {e}")
+    
+    # Default mapping
+    return {
+        "default_female": {
+            "kokoro": "en_female_1",
+            "google": "en-US-Neural2-F",
+            "elevenlabs": "21m00Tcm4TlvDq8ikWAM", # Rachel
+            "murf": "en-US-madison",
+            "azure": "en-US-JennyNeural",
+            "piper": "en_US-lessac-medium"
+        },
+        "default_male": {
+            "kokoro": "en_male_1",
+            "google": "en-US-Neural2-J",
+            "elevenlabs": "pNInz6obpgDQGcFmaJgB", # Adam
+            "murf": "en-US-daniel",
+            "azure": "en-US-GuyNeural",
+            "piper": "en_US-ljspeech-medium"
+        }
+    }
+```
+
+### Telnyx Integration
+
+No changes are needed to the Telnyx handler itself, as we'll use the TTS service's functionality to generate audio and upload it to Telnyx storage. The `TTSService.generate_and_upload` method will handle this for us.
+
+### Webhook Handler Updates
+
+Update the webhook handler to use the new TTS service:
+
+```python
+# app/webhook_blueprint.py
+
+# In the telnyx_call_webhook function, replace the TTS client usage with TTS service:
+
+# Get service instances from application config
+redis_store = current_app.config['REDIS_STORE']
+tts_service = current_app.config['TTS_SERVICE']  # Use TTS service instead of TTS client
+telnyx_handler = current_app.config['TELNYX_HANDLER']
+assemblyai_handler = current_app.config['ASSEMBLYAI_HANDLER']
+llm_handler = current_app.config['LLM_HANDLER']
+
+# ... existing code ...
+
+# When generating speech, use the TTS service's generate_and_upload method:
+if event_type == 'call.answered':
+    # ... existing code ...
+    
+    # Generate greeting message
+    greeting = f"Hello {user.name}, this is your morning coffee. Today's affirmation is: {call_session.affirmation}"
+    
+    # Generate speech and upload to Telnyx storage in one step
+    audio_upload = tts_service.generate_and_upload(
+        text=greeting, 
+        voice_id="default_female"  # Use the mapped voice
+    )
+    
+    if not audio_upload:
+        logger.error(f"Failed to generate or upload speech for greeting")
+        return jsonify({"error": "TTS or upload failed"}), 500
+    
+    # Play the audio in the call
+    success = telnyx_handler.play_audio(
+        call_control_id=call_control_id,
+        audio_url=audio_upload['url'],
+        client_state='greeting'
+    )
+    
+    # ... continue with existing code ...
+```
+
+Update all other similar sections in the webhook handler to use the TTS service.
+
+## Performance Optimizations
+
+### Caching System
+
+The TTS service already includes a Redis-based caching system. To refine it further, you can add a fallback to a filesystem cache:
+
+```python
+# app/modules/tts/cache.py
+import os
+import json
+import time
+import hashlib
+from typing import Dict, Any, Optional, Tuple
+
+class TTSCache:
+    """Caching system for TTS audio with Redis and filesystem fallbacks."""
+    
+    def __init__(self, redis_client=None, cache_dir=None, ttl=86400):
+        """
+        Initialize the TTS cache.
+        
+        Args:
+            redis_client: Redis client for primary caching
+            cache_dir (str): Directory for filesystem cache
+            ttl (int): Cache TTL in seconds
+        """
+        self.redis_client = redis_client
+        self.cache_dir = cache_dir
+        self.ttl = ttl
+        
+        # Create cache directory if it doesn't exist
+        if self.cache_dir and not os.path.exists(self.cache_dir):
+            os.makedirs(self.cache_dir)
+    
+    def get(self, key: str) -> Optional[bytes]:
+        """
+        Get cached audio data.
+        
+        Args:
+            key (str): Cache key
+            
+        Returns:
+            Optional[bytes]: Cached audio data or None if not found
+        """
+        # Try Redis first
+        if self.redis_client:
+            data = self.redis_client.get(key)
+            if data:
+                return data
+        
+        # Fall back to filesystem cache
+        if self.cache_dir:
+            file_path = os.path.join(self.cache_dir, f"{key}.wav")
+            if os.path.exists(file_path):
+                # Check if file is expired
+                mtime = os.path.getmtime(file_path)
+                if time.time() - mtime <= self.ttl:
+                    with open(file_path, 'rb') as f:
+                        return f.read()
+                else:
+                    # Remove expired file
+                    os.unlink(file_path)
+        
+        return None
+    
+    def set(self, key: str, data: bytes) -> bool:
+        """
+        Cache audio data.
+        
+        Args:
+            key (str): Cache key
+            data (bytes): Audio data
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        success = False
+        
+        # Cache in Redis if available
+        if self.redis_client:
+            try:
+                self.redis_client.setex(key, self.ttl, data)
+                success = True
+            except Exception:
+                pass
+        
+        # Cache in filesystem if enabled
+        if self.cache_dir:
+            try:
+                file_path = os.path.join(self.cache_dir, f"{key}.wav")
+                with open(file_path, 'wb') as f:
+                    f.write(data)
+                success = True
+            except Exception:
+                pass
+        
+        return success
+    
+    def delete(self, key: str) -> bool:
+        """
+        Delete cached audio data.
+        
+        Args:
+            key (str): Cache key
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        success = False
+        
+        # Delete from Redis if available
+        if self.redis_client:
+            try:
+                self.redis_client.delete(key)
+                success = True
+            except Exception:

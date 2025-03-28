@@ -1,0 +1,24 @@
+{
+  "name": "affimations",
+  "version": "1.0.0",
+  "description": "A system that sends daily affirmations via SMS, calls users to have them repeat the affirmation, and enables AI conversation using Telnyx, OpenAI TTS, Spark TTS, AssemblyAI, and containerized with Docker.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rephug/morningcf.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/rephug/morningcf/issues"
+  },
+  "homepage": "https://github.com/rephug/morningcf#readme"
+}

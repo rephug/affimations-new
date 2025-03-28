@@ -1,0 +1,14 @@
+# Development Dockerfile for React
+
+FROM node:18-alpine
+
+WORKDIR /app
+
+# Install dependencies - will use mounted node_modules in development
+COPY package.json package-lock.json ./
+
+# Expose port for React development server
+EXPOSE 3000
+
+# Command will be provided by docker-compose
+CMD ["npm", "start"] 

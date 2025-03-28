@@ -1,0 +1,185 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Morning Coffee Color Scheme */
+    --deep-brown: 22 52% 16%;      /* #3B2416 - rich coffee beans */
+    --medium-brown: 23 35% 38%;    /* #825B3F - warm and inviting */
+    --coffee: 23 30% 48%;          /* #A27254 - medium coffee tone */
+    --caramel: 24 33% 65%;         /* #C89F82 - lighter coffee with cream */
+    --cream: 35 63% 91%;           /* #F4E4CF - soft background color */
+    --sunrise-orange: 24 100% 63%; /* #FF8C42 - energetic accent color */
+    --warm-yellow: 43 100% 70%;    /* #FFD166 - reminiscent of morning sun */
+    --morning-blue: 200 63% 67%;   /* #7BBCDE - optional sky-like accent */
+
+    /* Map to Tailwind CSS variables */
+    --background: var(--cream);
+    --foreground: var(--deep-brown);
+
+    --card: 0 0% 100%;
+    --card-foreground: var(--deep-brown);
+
+    --popover: 0 0% 100%;
+    --popover-foreground: var(--deep-brown);
+
+    --primary: var(--sunrise-orange);
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: var(--medium-brown);
+    --secondary-foreground: 0 0% 100%;
+
+    --accent: var(--warm-yellow);
+    --accent-foreground: var(--deep-brown);
+
+    --muted: var(--caramel);
+    --muted-foreground: var(--medium-brown);
+
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: var(--caramel);
+    --input: var(--cream);
+    --ring: var(--sunrise-orange);
+
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: var(--deep-brown);
+    --foreground: var(--cream);
+
+    --card: var(--medium-brown);
+    --card-foreground: var(--cream);
+
+    --popover: var(--deep-brown);
+    --popover-foreground: var(--cream);
+
+    --primary: var(--sunrise-orange);
+    --primary-foreground: var(--deep-brown);
+
+    --secondary: var(--caramel);
+    --secondary-foreground: var(--deep-brown);
+
+    --accent: var(--warm-yellow);
+    --accent-foreground: var(--deep-brown);
+
+    --muted: var(--medium-brown);
+    --muted-foreground: var(--caramel);
+
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: var(--medium-brown);
+    --input: var(--medium-brown);
+    --ring: var(--sunrise-orange);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+}
+
+/* Custom Animation Classes */
+.animate-fade-in {
+  animation: fadeIn 0.5s ease-in-out forwards;
+}
+
+.animate-slide-up {
+  animation: slideUp 0.5s ease-in-out forwards;
+}
+
+.animate-slide-in-right {
+  animation: slideInRight 0.5s ease-in-out forwards;
+}
+
+.animate-pulse-subtle {
+  animation: pulseSubtle 2s infinite;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slideUp {
+  from {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    transform: translateX(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes pulseSubtle {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+/* Custom styles for Morning Coffee */
+.morning-coffee-gradient {
+  background: linear-gradient(135deg, #F4E4CF 0%, #C89F82 100%);
+}
+
+.morning-coffee-card {
+  background: white;
+  border-radius: 20px;
+  box-shadow: 0 10px 30px rgba(59, 36, 22, 0.1);
+}
+
+.morning-coffee-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 15px 35px rgba(59, 36, 22, 0.15);
+  transition: all 0.3s ease;
+}
+
+.morning-coffee-button {
+  background: #FF8C42;
+  color: white;
+  padding: 0.75rem 1.5rem;
+  border-radius: 30px;
+  font-weight: 600;
+  transition: all 0.3s ease;
+  box-shadow: 0 5px 15px rgba(255, 140, 66, 0.3);
+}
+
+.morning-coffee-button:hover {
+  background: #3B2416;
+  transform: translateY(-3px);
+  box-shadow: 0 8px 20px rgba(59, 36, 22, 0.3);
+}
+
+.gradient-heading {
+  background: linear-gradient(to right, #3B2416, #FF8C42);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}

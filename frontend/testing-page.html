@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Morning Coffee Testing Suite</title>
+    <style>
+        :root {
+            --deep-brown: #3A2618;
+            --medium-brown: #5D4037;
+            --coffee: #795548;
+            --caramel: #D7CCC8;
+            --cream: #EFEBE9;
+            --sunrise-orange: #FF9800;
+            --warm-yellow: #FFD54F;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(145deg, var(--cream) 0%, var(--caramel) 100%);
+            margin: 0;
+            padding: 0;
+            min-height: 100vh;
+            color: var(--deep-brown);
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 3rem;
+        }
+        
+        h1 {
+            font-size: 2.5rem;
+            background: linear-gradient(90deg, var(--deep-brown), var(--sunrise-orange));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 0.5rem;
+        }
+        
+        .card {
+            background-color: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            padding: 2rem;
+            margin-bottom: 2rem;
+        }
+        
+        .card h2 {
+            color: var(--coffee);
+            margin-top: 0;
+            border-bottom: 2px solid var(--caramel);
+            padding-bottom: 0.5rem;
+        }
+        
+        .tools-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 1.5rem;
+        }
+        
+        .tool-card {
+            background-color: var(--cream);
+            padding: 1.5rem;
+            border-radius: 8px;
+            transition: transform 0.2s, box-shadow 0.2s;
+            height: 100%;
+        }
+        
+        .tool-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.1);
+            background-color: var(--caramel);
+        }
+        
+        .tool-icon {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+        }
+        
+        .tool-card h3 {
+            margin-top: 0;
+            color: var(--deep-brown);
+        }
+        
+        .tool-card p {
+            color: var(--medium-brown);
+        }
+        
+        a {
+            text-decoration: none;
+            color: inherit;
+        }
+        
+        .info-row {
+            margin-bottom: 1rem;
+            padding: 0.75rem;
+            background-color: var(--cream);
+            border-radius: 4px;
+        }
+        
+        .info-row h3 {
+            margin-top: 0;
+            margin-bottom: 0.5rem;
+            color: var(--deep-brown);
+        }
+        
+        .info-row p {
+            margin: 0;
+            color: var(--medium-brown);
+        }
+        
+        .list-inside {
+            padding-left: 1.5rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Morning Coffee Testing Suite</h1>
+        </div>
+        
+        <div class="card">
+            <h2>Testing Tools</h2>
+            <p>Select one of the testing tools below to help debug and test the Morning Coffee system.
+               These tools are intended for development and testing purposes.</p>
+            
+            <div class="tools-grid">
+                <a href="/testing/voice-test">
+                    <div class="tool-card">
+                        <div class="tool-icon">🔊</div>
+                        <h3>Voice Testing Lab</h3>
+                        <p>Test different voices, styles, and text-to-speech engines</p>
+                    </div>
+                </a>
+                
+                <a href="/testing/call-test">
+                    <div class="tool-card">
+                        <div class="tool-icon">📱</div>
+                        <h3>Call Testing Lab</h3>
+                        <p>Send test calls to phone numbers with different affirmations</p>
+                    </div>
+                </a>
+                
+                <a href="/api/health">
+                    <div class="tool-card">
+                        <div class="tool-icon">🩺</div>
+                        <h3>API Health Check</h3>
+                        <p>Check the status of various API endpoints and services</p>
+                    </div>
+                </a>
+            </div>
+        </div>
+        
+        <div class="card">
+            <h2>System Information</h2>
+            
+            <div class="info-row">
+                <h3>Environment</h3>
+                <p>Production</p>
+            </div>
+            
+            <div class="info-row">
+                <h3>Build Information</h3>
+                <p>Version: 1.0.0</p>
+                <p>Build Date: March 25, 2025</p>
+            </div>
+            
+            <div class="info-row">
+                <h3>Connected Services</h3>
+                <ul class="list-inside">
+                    <li>TTS Service: OpenAI API</li>
+                    <li>Calling Service: Telnyx</li>
+                    <li>Voice Analysis: AssemblyAI</li>
+                    <li>Database: Supabase</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</body>
+</html> 

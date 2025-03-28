@@ -1,0 +1,105 @@
+version: '3.8'
+
+services:
+  # Development overrides for main application
+  app:
+    build:
+      context: ./app
+      dockerfile: Dockerfile.dev
+      args:
+        - INSTALL_REALTIMETTS=true
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    depends_on:
+      - redis
+      - spark-tts
+    env_file:
+      - .env
+    volumes:
+      - ./app:/app
+      - tts-cache:/app/cache/tts
+    environment:
+      - FLASK_APP=app.py
+      - FLASK_ENV=development
+      - FLASK_DEBUG=1
+      # RealtimeTTS configuration
+      - TTS_PROVIDER=kokoro
+      - TTS_FALLBACK_PROVIDERS=openai,system
+      - TTS_CACHE_ENABLED=true
+      - TTS_CACHE_TTL=86400
+      - TTS_CACHE_MEMORY_CAPACITY=100
+      - TTS_CACHE_MEMORY_ENABLED=true
+      - TTS_CACHE_REDIS_ENABLED=true
+      - TTS_CACHE_FILE_ENABLED=true
+      - TTS_VOICE_POOL_SIZE=2
+      - TTS_VOICE_POOL_MIN_SIZE=1
+      - TTS_VOICE_POOL_MAX_SIZE=5
+      - TTS_VOICE_POOL_TTL=3600
+      - TTS_HEALTH_CHECK_INTERVAL=60
+      - TTS_STREAMING_CHUNK_SIZE_MS=250
+      - TTS_STREAMING_BUFFER_THRESHOLD=3
+      - TTS_STREAMING_MAX_SILENCE_MS=500
+      - TTS_STREAMING_MAX_ACTIVE_STREAMS=10
+      - TTS_INITIAL_FRAGMENT_WORDS=5
+      - TTS_MIN_FIRST_FRAGMENT_WORDS=3
+      - TTS_SENTENCE_PAUSE_MS=300
+      - TTS_MIN_PAUSE_MS=100
+      - TTS_BREAK_ON_PUNCTUATION=.!?;:,
+      - TTS_PREDICTION_DEPTH=2
+      - TTS_PREDICTION_MIN_CONFIDENCE=0.7
+      - TTS_PREWARM_ENABLED=true
+      - TTS_PREWARM_PHRASES=Hello,Welcome to Morning Coffee,Your affirmation for today is,Please repeat after me,Thank you
+    networks:
+      - morning-coffee-network
+
+  # Development overrides for Spark TTS service
+  spark-tts:
+    build:
+      context: ./spark-tts
+      dockerfile: Dockerfile.dev
+    restart: unless-stopped
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./spark-tts:/app
+      - spark-tts-models:/app/models
+    env_file:
+      - .env
+    environment:
+      - FLASK_ENV=development
+      - FLASK_DEBUG=1
+    networks:
+      - morning-coffee-network
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --maxmemory 1gb --maxmemory-policy allkeys-lru
+    networks:
+      - morning-coffee-network
+
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    depends_on:
+      - redis
+    networks:
+      - morning-coffee-network
+
+networks:
+  morning-coffee-network:
+    driver: bridge
+
+volumes:
+  redis-data:
+  spark-tts-models:
+  tts-cache: 

@@ -1,0 +1,11 @@
+flask==2.2.5
+flask-cors==3.0.10
+soundfile==0.12.1
+numpy>=1.24.0
+torch>=2.0.0
+scipy>=1.10.1
+huggingface_hub>=0.19.0
+tqdm>=4.65.0
+transformers>=4.30.0
+einops>=0.7.0
+librosa>=0.10.1 

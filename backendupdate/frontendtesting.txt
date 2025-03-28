@@ -1,0 +1,209 @@
+# Frontend Implementation Guide for Morning Coffee + RealtimeTTS
+
+This guide outlines how to update your frontend on aireeaa.com to incorporate RealtimeTTS functionality, focusing on creating a test page with voice provider selection and call testing capabilities.
+
+## Overview of Frontend Changes
+
+You'll need to create a test interface that allows:
+- Selection of TTS providers (OpenAI, Google, Kokoro, etc.)
+- Selection of specific voices within each provider
+- Input of a phone number for test calls
+- Management of affirmations (default and custom)
+- Triggering test calls with selected configuration
+
+## Component Requirements
+
+### 1. Provider and Voice Selection
+
+```
+/generate Create a ProviderSelector component in frontend/src/components/tts/ProviderSelector.jsx that includes dropdown selection for TTS providers and their voices. Include all major providers: OpenAI, Google, Kokoro, ElevenLabs, Murf.ai with their respective voices.
+```
+
+#### Checklist:
+- [ ] Create `ProviderSelector.jsx` component
+- [ ] Implement provider dropdown with all options
+- [ ] Add voice selection dropdown that updates based on provider
+- [ ] Set default provider to OpenAI (gpt-4o-mini-tts)
+- [ ] Include loading state for fetching available voices
+- [ ] Add proper styling with responsive design
+- [ ] Implement onChange handlers for both selections
+
+### 2. Affirmation Management
+
+```
+/generate Create an AffirmationInput component in frontend/src/components/tts/AffirmationInput.jsx that displays a default affirmation and allows users to edit it or use their own. Include a text area for custom affirmations and a reset button to return to the default.
+```
+
+#### Checklist:
+- [ ] Create `AffirmationInput.jsx` component
+- [ ] Add default affirmation display
+- [ ] Implement text area for custom affirmation input
+- [ ] Add reset button to restore default affirmation
+- [ ] Include character count and validation
+- [ ] Implement onChange handlers for affirmation updates
+- [ ] Add proper styling with responsive design
+
+### 3. Call Test Form
+
+```
+/generate Create a CallTestForm component in frontend/src/components/tts/CallTestForm.jsx that combines provider selection, voice selection, phone number input, and affirmation management into a single form. Include validation and a submit button for testing.
+```
+
+#### Checklist:
+- [ ] Create `CallTestForm.jsx` component
+- [ ] Integrate ProviderSelector component
+- [ ] Add phone number input with validation (E.164 format)
+- [ ] Integrate AffirmationInput component
+- [ ] Add submit button for initiating test calls
+- [ ] Implement form validation for all fields
+- [ ] Create loading state for form submission
+- [ ] Add success/error message display
+- [ ] Implement proper responsive styling
+
+### 4. Test Results Display
+
+```
+/generate Create a TestResults component in frontend/src/components/tts/TestResults.jsx that displays the results of TTS tests, including call status, duration, latency metrics, and audio preview if available.
+```
+
+#### Checklist:
+- [ ] Create `TestResults.jsx` component
+- [ ] Implement call status display with visual indicators
+- [ ] Add audio player for TTS preview if available
+- [ ] Create metrics display for latency and quality
+- [ ] Add timeline view of call progress
+- [ ] Implement error display for failed tests
+- [ ] Include collapsible details section
+- [ ] Add proper styling with responsive design
+
+## API Integration
+
+### 1. Provider Configuration API
+
+```
+/generate Create a TTSService in frontend/src/services/TTSService.js that handles API calls to the backend for TTS functionality, including fetching providers, voices, initiating test calls, and retrieving results.
+```
+
+#### Checklist:
+- [ ] Create `TTSService.js` with API integration
+- [ ] Implement `getProviders()` method
+- [ ] Add `getVoicesForProvider(providerId)` method
+- [ ] Create `testTTS(text, providerId, voiceId)` method
+- [ ] Implement `makeTestCall(phoneNumber, affirmation, providerId, voiceId)` method
+- [ ] Add `getTestResults(testId)` method
+- [ ] Implement proper error handling and retries
+- [ ] Add authentication header management
+
+### 2. Backend API Requirements
+
+You'll need to expose the following endpoints in your backend:
+
+- `GET /api/tts/providers` - Returns available TTS providers
+- `GET /api/tts/voices/:providerId` - Returns voices for a specific provider
+- `POST /api/tts/test` - Tests TTS generation with given parameters
+- `POST /api/call/test` - Initiates a test call with specified parameters
+- `GET /api/call/status/:callId` - Returns status and metrics for a call
+
+## Test Page Implementation
+
+### Creating the Main Test Page
+
+```
+/generate Create a TTSTestPage component in frontend/src/pages/TTSTestPage.jsx that combines all the TTS testing components into a unified interface. Include tabs for different test types, configuration settings, and results display.
+```
+
+#### Checklist:
+- [ ] Create `TTSTestPage.jsx` as main test interface
+- [ ] Implement page layout with responsive design
+- [ ] Add navigation tabs for different test types
+- [ ] Integrate CallTestForm component
+- [ ] Add TestResults component for displaying outcomes
+- [ ] Create configuration section for advanced settings
+- [ ] Implement history section for previous tests
+- [ ] Add proper page title and description
+
+### Adding Navigation
+
+```
+/generate Update the site navigation to include the new TTS Test page. Add a route in the routing configuration and a menu item in the main navigation.
+```
+
+#### Checklist:
+- [ ] Update `App.jsx` or routing configuration
+- [ ] Add new route for TTS test page
+- [ ] Update navigation menu with new item
+- [ ] Add proper link and icon
+- [ ] Implement access control if needed
+- [ ] Create breadcrumbs for navigation
+
+## Default Configuration
+
+Ensure these defaults are set in your components:
+
+1. Default TTS Provider: OpenAI (gpt-4o-mini-tts)
+2. Include all providers in the dropdown:
+   - OpenAI (gpt-4o-mini-tts, etc.)
+   - Google (Chirp voices)
+   - Kokoro (all voices)
+   - ElevenLabs (all voices)
+   - Murf.ai (all voices)
+   - Spark TTS (if available)
+
+3. Default Affirmation: "I am worthy of love and respect. I embrace my strengths and accept my weaknesses. Today is full of possibilities."
+
+## Provider-Specific Components
+
+### Voice Preview
+
+```
+/generate Create a VoicePreview component in frontend/src/components/tts/VoicePreview.jsx that allows users to preview how each voice sounds with a sample text. Include a play button and audio visualization.
+```
+
+#### Checklist:
+- [ ] Create `VoicePreview.jsx` component
+- [ ] Implement audio playback functionality
+- [ ] Add audio visualization during playback
+- [ ] Create play/pause controls
+- [ ] Add loading state for audio generation
+- [ ] Implement provider and voice selection integration
+- [ ] Handle errors in audio generation
+- [ ] Add proper styling with responsive design
+
+## Integration Checklist
+
+Final steps to complete the frontend implementation:
+
+1. Update package.json with required dependencies:
+```json
+{
+  "dependencies": {
+    // Existing dependencies
+    "react-select": "^5.7.4",
+    "react-phone-input-2": "^2.15.1",
+    "react-audio-visualizer": "^1.0.3",
+    "axios": "^1.5.0",
+    "react-hook-form": "^7.46.1",
+    "react-toastify": "^9.1.3"
+  }
+}
+```
+
+2. Update environment variables:
+```
+REACT_APP_API_URL=https://api.aireeaa.com
+REACT_APP_DEFAULT_PROVIDER=openai
+REACT_APP_DEFAULT_VOICE=gpt-4o-mini-tts
+```
+
+3. Test the implementation across different browsers:
+   - Chrome
+   - Firefox
+   - Safari
+   - Edge
+
+4. Ensure responsive design works on:
+   - Desktop
+   - Tablet
+   - Mobile devices
+
+This guide provides a complete roadmap for implementing the TTS testing functionality in your frontend. Start with the core components and API integration, then work on the main test page and additional features.

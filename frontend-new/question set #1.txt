@@ -1,0 +1,547 @@
+question set #1
+
+## Questions for Clarification
+
+To better understand the implementation requirements and ensure successful delivery, I have the following questions:
+
+### Project Scope & Features
+1. Which features are currently implemented vs. which are new additions? This would help prioritize development efforts.
+2. Is there a specific timeline or priority order for implementing the different sections (dashboard, calls, tasks, voice insights)?
+3. Are there any MVP (Minimum Viable Product) features that should be prioritized first?
+
+### Technical Implementation
+4. How should the frontend communicate with the existing TTS providers you've implemented (OpenAI, Google, Azure, etc.)? Will there be a unified API?
+5. What authentication flow is currently in place? Will we need to migrate existing users to Supabase?
+6. For the voice analysis insights, is the backend infrastructure already in place to provide this data?
+7. How should the frontend handle potential latency issues with TTS generation?
+
+### Design & User Experience
+8. Are there existing design assets (Figma/Adobe XD) that align with the described design system?
+9. How should the application handle offline functionality or poor network conditions?
+10. For the audio components, are there specific accessibility requirements beyond standard WCAG?
+11. How should the voice styling lab interact with the TTS providers you've already implemented?
+
+### Integration & Data
+12. How will the application integrate with external services for email, weather, traffic, and special interests?
+13. What data migration strategy should be employed for existing users?
+14. For the semantic search functionality, is Weaviate already configured with transcription data?
+15. Will the system use the existing voice data for baseline metrics in the voice health monitor?
+
+### Testing & Deployment
+16. Is there a preference for specific test coverage metrics?
+17. Are there existing CI/CD pipelines in place?
+18. How should the frontend handle multiple TTS provider testing in the testing environment?
+19. Is there a specific approach needed for A/B testing voice styles?
+
+### Administrative & Security
+20. What level of admin functionality is required for the first release?
+21. Are there specific security requirements beyond standard authentication?
+22. How should the frontend handle API key management for the various TTS providers?
+
+### Integration with Current System
+23. How will this new frontend interact with the existing Morning Coffee backend infrastructure?
+24. Will we need to implement feature flags to gradually roll out new capabilities?
+25. How should the Telnyx integration for phone calls be handled in the frontend?
+
+Addressing these questions will help ensure the frontend implementation aligns with your expectations and integrates properly with the existing Morning Coffee application components, especially the comprehensive TTS provider system you've already built.
+
+Answer set #1
+# Morning Coffee Implementation Answers
+
+Let me address each of your questions to help clarify the implementation path forward.
+
+## Project Scope & Features
+
+### 1. Current vs. New Features
+Based on the code we've developed, these are currently implemented:
+- Multi-provider TTS system (OpenAI, Google, Azure, Kokoro, etc.)
+- Basic call flow for affirmations
+- Telnyx integration for calls with HD/OPUS support
+- OpenAI transcription integration
+
+New additions include:
+- Email summarization
+- Task management system
+- Weather and traffic information
+- Voice analysis for emotional insights
+- Weaviate vector storage for conversation memory
+- Special interest updates
+- Enhanced contextual conversation
+
+### 2. Timeline/Priority Order
+I recommend this implementation sequence:
+1. Core call flow enhancement (affirmations + voice styling)
+2. Testing framework for TTS/STT validation
+3. Weaviate integration for memory
+4. Task management system
+5. Information hub (email, weather, traffic)
+6. Voice analysis and insights
+7. Special interest updates
+
+### 3. MVP Features
+For MVP, focus on:
+1. Enhanced affirmation delivery with OpenAI voice styling
+2. Basic task management (add/view via voice)
+3. Simple call memory system
+4. Weather briefing
+5. Testing dashboard for all voice components
+
+## Technical Implementation
+
+### 4. TTS Provider Communication
+The frontend should communicate with TTS providers through the unified API we've implemented. The `TTSService` acts as an abstraction layer, so the frontend only needs to call endpoints that interact with this service rather than directly with individual providers.
+
+A simple REST API with these endpoints would work well:
+- `POST /api/tts/generate` - Generate speech with provider selection
+- `GET /api/tts/providers` - List available providers
+- `GET /api/tts/voices` - Get voices for a specific provider
+
+### 5. Authentication Flow
+Since you're planning to use Supabase, implementing their authentication flow would be ideal:
+- JWT-based authentication
+- User data stored in Supabase tables
+- Row-level security policies for data protection
+
+If you have existing users, a migration script would be needed to transfer them to Supabase, with temporary tokens issued to facilitate the transition.
+
+### 6. Voice Analysis Backend
+The voice analysis backend is not yet implemented based on our discussion. You'll need to build this using:
+- OpenSMILE for feature extraction
+- Custom models for emotion classification
+- API endpoints to expose the analysis results
+
+### 7. TTS Latency Handling
+To handle TTS latency:
+1. Implement progressive loading indicators
+2. Use a caching system for common phrases (already implemented)
+3. Pre-generate audio for predictable parts of the conversation
+4. Implement fallback to faster providers when needed
+5. Use streaming audio where possible for perceived performance
+
+## Design & User Experience
+
+### 8. Design Assets
+You'll need to develop design assets that align with the modern, clean aesthetic of a voice-first application. Key considerations:
+- Voice-oriented UI components
+- Audio visualization elements
+- Emotional state indicators
+- Timeline visualizations for trends
+
+### 9. Offline Functionality
+For offline/poor network conditions:
+1. Cache critical user data locally
+2. Implement offline task creation
+3. Use service workers for offline functionality
+4. Queue updates for synchronization when connection is restored
+5. Provide clear status indicators for connectivity issues
+
+### 10. Accessibility Requirements
+Beyond standard WCAG, consider:
+- Screen reader optimization for audio controls
+- Transcription display options for audio content
+- Alternative input methods for voice interactions
+- Support for text-based interaction alongside voice
+- Color contrast considerations for emotion indicators
+
+### 11. Voice Styling Lab Integration
+The Voice Styling Lab should interact with our TTS providers through the TTSService we built:
+1. Use the `generate_with_style()` method for OpenAI provider
+2. Create UI controls that map to provider-specific parameters
+3. Implement A/B testing of different styles
+4. Store user preferences in the database
+5. Allow export of preferred styles to the main application
+
+## Integration & Data
+
+### 12. External Service Integration
+Integration approaches:
+- **Email**: OAuth 2.0 flow with Gmail/Outlook APIs
+- **Weather**: OpenWeatherMap or similar API with geolocation
+- **Traffic**: Google Maps or Mapbox API
+- **Special Interests**: RSS feeds, specialized APIs (sports, finance)
+
+These should be implemented as microservices with standardized response formats.
+
+### 13. Data Migration Strategy
+For existing users:
+1. Create Supabase schema matching current data structure
+2. Develop migration scripts for user data
+3. Use batch processing for historical data
+4. Implement version flags to handle both data formats
+5. Provide user notification of the upgrade
+
+### 14. Weaviate Configuration
+Weaviate will need to be configured with:
+- Appropriate schema for conversation data
+- Vector embedding generation pipeline
+- Integration with transcription service
+- Relevance tuning for retrieval
+- Cross-reference structure for related information
+
+### 15. Voice Data for Baseline Metrics
+If existing voice data is available, it should be processed to:
+1. Extract baseline acoustic features
+2. Establish normal ranges for each user
+3. Create initial emotion classification models
+4. Set up anomaly detection thresholds
+5. Initialize the longitudinal tracking system
+
+## Testing & Deployment
+
+### 16. Test Coverage Metrics
+Recommended test coverage:
+- 90%+ for core TTS/STT functions
+- 80%+ for voice analysis components
+- 70%+ for UI components
+- End-to-end tests for all critical user flows
+
+### 17. CI/CD Pipelines
+Based on your stack, consider:
+- GitHub Actions for CI/CD
+- Vercel for Next.js frontend deployment
+- Docker-based deployment for backend services
+- Automated testing in staging environment
+- Blue/green deployment for zero-downtime updates
+
+### 18. Multiple TTS Provider Testing
+The testing environment should:
+1. Allow side-by-side comparison of providers
+2. Support blind A/B testing of voice quality
+3. Measure performance metrics (latency, quality)
+4. Test fallback mechanisms
+5. Validate voice style mapping across providers
+
+### 19. A/B Testing Voice Styles
+Approach for A/B testing:
+1. Create paired variations of voice styles
+2. Implement user preference tracking
+3. Use statistical analysis for significance testing
+4. Allow direct comparison playback
+5. Track emotional response to different styles
+
+## Administrative & Security
+
+### 20. Admin Functionality
+First release admin features:
+- User management and metrics
+- TTS provider status monitoring
+- Voice style template management
+- System health dashboard
+- Usage statistics and quotas
+
+### 21. Security Requirements
+Beyond standard authentication:
+- Encryption for voice data at rest
+- Secure handling of API keys
+- Audit logging for all sensitive operations
+- Rate limiting to prevent abuse
+- Data retention and purging policies
+
+### 22. API Key Management
+The frontend should:
+1. Never expose API keys directly
+2. Use backend proxies for all provider calls
+3. Implement key rotation mechanisms
+4. Monitor and alert on unusual usage patterns
+5. Support per-user or per-session rate limiting
+
+## Integration with Current System
+
+### 23. Frontend-Backend Interaction
+The new frontend should:
+1. Use RESTful APIs to communicate with existing backend
+2. Implement WebSocket for real-time updates
+3. Use API versioning to maintain compatibility
+4. Cache responses when appropriate
+5. Handle authentication consistently across services
+
+### 24. Feature Flag Implementation
+For gradual rollout:
+1. Implement feature flags in both frontend and backend
+2. Use a feature flag service (or simple database flags)
+3. Create cohort-based rollout strategy
+4. Implement analytics to track feature usage
+5. Allow user opt-in for beta features
+
+### 25. Telnyx Call Integration
+The frontend should:
+1. Provide call scheduling interface
+2. Display call status and history
+3. Allow pre-configuration of call content
+4. Provide post-call summaries and analytics
+5. Support manual call initiation
+
+questions set #2
+<think>The user has provided comprehensive answers to the questions I posed about the Morning Coffee frontend implementation. I should now review these answers and determine if there are any follow-up questions or areas that still need clarification. 
+
+Let's analyze key aspects from the user's response:
+
+1. Project structure and timeline: The user has provided a clear breakdown of current vs. new features and a sensible implementation sequence. This seems well thought out.
+
+2. Technical implementation details: The user has specified how the frontend should interact with the TTS providers through a unified API, provided details on authentication using Supabase, mentioned that the voice analysis backend needs to be built, and described strategies for handling TTS latency.
+
+3. Design and UX considerations: The user has mentioned key design elements needed, offline functionality requirements, accessibility considerations, and how the Voice Styling Lab should integrate with their TTS providers.
+
+4. Integration and data handling: The user has described approaches for external service integration, data migration, Weaviate configuration, and using existing voice data for baseline metrics.
+
+5. Testing, deployment, and security: The user has provided guidance on test coverage metrics, CI/CD pipelines, testing multiple TTS providers, admin functionality, security requirements, and API key management.
+
+6. Integration with current system: The user has specified how the frontend should interact with the backend, implementation of feature flags, and Telnyx call integration.
+
+Based on the comprehensive answers, I think the following areas might benefit from additional clarification:</think>Thank you for providing such comprehensive answers to my questions! Your detailed responses give me a much clearer understanding of the Morning Coffee implementation plan. Based on your answers, I have a few follow-up questions to ensure I fully understand the implementation approach:
+
+## Follow-up Questions
+
+### Architecture & Integration
+
+1. **API Structure:** Since the frontend will communicate with the TTS service through a REST API, is there a preference for how the API routes should be organized? (e.g., feature-based, resource-based, or action-based)
+
+2. **Real-time Requirements:** Beyond WebSockets for real-time updates, are there specific components that require real-time bidirectional communication during voice interactions?
+
+3. **Service Communication:** How should the different microservices (TTS, voice analysis, external integrations) communicate with each other? Direct calls, message queue, or API gateway?
+
+### Voice Features & Implementation
+
+4. **Voice Analysis Privacy:** What level of voice data should be stored for analysis purposes, and what should be ephemeral? Are there specific privacy requirements around voice data?
+
+5. **Emotion Detection Scope:** For the voice analysis capabilities, what granularity of emotion detection is expected? (e.g., basic emotions only, intensity levels, confidence scores)
+
+6. **Call Recording:** How should the frontend handle recording consent and indicate when recording is active during calls?
+
+### User Experience & Personalization
+
+7. **Personalization Strategy:** How deeply should user preferences affect the UX? Should the entire interface adapt based on user behavior, or just content elements?
+
+8. **Multi-modal Interaction:** Since this is voice-first, how should the interface balance voice and traditional controls for users who prefer different interaction methods?
+
+9. **Error Recovery:** What's the preferred UX when voice interactions fail (recognition errors, TTS failures)? Should there be graceful fallbacks to text?
+
+### Technical Details
+
+10. **State Persistence:** What user state needs to persist between sessions, and are there specific storage requirements for this data?
+
+11. **i18n & Localization:** Is there a need for multi-language support in the initial implementation, especially considering the multiple TTS providers with different language capabilities?
+
+12. **Analytics Strategy:** What specific user interactions and voice metrics should be tracked for product improvement?
+
+### Development & Deployment
+
+13. **Team Structure:** Will different teams be responsible for different parts of the implementation, or will a single team handle the entire frontend?
+
+14. **Development Environment:** What development environments will be needed to effectively test the integration with all the TTS providers and backend services?
+
+15. **Performance Benchmarks:** Are there specific performance targets for the frontend, especially regarding voice interaction latency?
+
+These additional questions should help further refine the implementation plan. I'm particularly interested in understanding more about the real-time voice interaction requirements and how different services should communicate, as these will significantly impact the architecture decisions.
+
+
+Answer set #2
+# Detailed Responses to Follow-up Questions
+
+## Architecture & Integration
+
+### 1. API Structure
+I recommend a resource-based API structure with clear route hierarchies:
+
+```
+/api/v1/tts/
+  ├── providers        # List available providers
+  ├── voices           # Get voices for selected provider
+  ├── generate         # Generate speech with specific parameters
+  └── styles           # Get/save voice styles
+
+/api/v1/calls/
+  ├── schedule         # Schedule new calls
+  ├── history          # Get call history
+  ├── transcripts      # Access call transcripts
+  └── analytics        # Call performance metrics
+
+/api/v1/user/
+  ├── preferences      # User settings
+  ├── tasks            # Task management
+  ├── insights         # Voice analysis results
+  └── data             # Data management (export, deletion)
+
+/api/v1/info/
+  ├── email            # Email summaries
+  ├── weather          # Weather information
+  ├── traffic          # Traffic updates
+  └── interests        # Special interest content
+```
+
+This structure maintains clear separation of concerns while providing intuitive endpoints.
+
+### 2. Real-time Requirements
+Beyond WebSockets, these components require real-time bidirectional communication:
+
+1. **Live Call Interface**: For in-browser call monitoring and control
+2. **Voice Analysis Visualization**: Real-time display of voice parameters during calls
+3. **Emotion Detection Feedback**: Immediate UI adaptation based on detected emotions
+4. **Transcription Display**: Live transcription of ongoing calls
+5. **TTS Streaming**: Progressive audio playback for longer TTS outputs
+
+These would benefit from using WebSockets or Server-Sent Events (SSE) with appropriate fallbacks.
+
+### 3. Service Communication
+I recommend a hybrid approach:
+
+- **API Gateway**: For external requests and authentication
+- **Message Queue (Redis Streams)**: For asynchronous processing and event-driven updates
+- **Direct gRPC Calls**: For high-performance internal service communication
+
+This provides the optimal balance of performance and flexibility. Time-sensitive voice processing should use direct gRPC calls, while background tasks like email processing can use message queues.
+
+## Voice Features & Implementation
+
+### 1. Voice Analysis Privacy
+For voice data privacy:
+
+- **Store**: 
+  - Aggregated acoustic features (not raw audio)
+  - Emotion classification results
+  - Voice quality metrics
+  - Anonymized trend data
+
+- **Ephemeral** (delete after processing):
+  - Raw audio recordings (unless user explicitly opts in)
+  - Speaker-identifying voice features
+  - Precise biometric data
+
+Implement clear consent flows and allow users to delete their voice profile at any time.
+
+### 2. Emotion Detection Scope
+For practical implementation, I recommend this emotion detection scope:
+
+- **Basic Emotions**: Joy, sadness, anger, fear, surprise, neutral
+- **Intensity Levels**: 3-5 levels per emotion (mild, moderate, strong)
+- **Confidence Scores**: 0-100% confidence for each detected emotion
+- **Blended States**: Support for mixed emotional states (e.g., 70% joy, 30% surprise)
+- **Trend Analysis**: Change in emotional state over time
+
+This provides sufficient granularity while remaining technically feasible.
+
+### 3. Call Recording
+For call recording:
+
+- **Pre-Call Consent**: Clear opt-in before enabling recording
+- **Visual Indicators**: Persistent recording indicator during calls
+- **Audio Cues**: Periodic audio reminders of recording status
+- **Purpose Specificity**: Clear explanation of how recordings will be used
+- **Recording Controls**: One-tap toggle to pause/resume recording
+- **Post-Call Options**: Review, delete, or download recordings after calls
+
+## User Experience & Personalization
+
+### 1. Personalization Strategy
+I recommend an adaptive personalization approach:
+
+- **Always Personalize**:
+  - Voice characteristics
+  - Information prioritization
+  - Affirmation content and delivery
+  - Vocabulary and speech patterns
+
+- **User-Configurable**:
+  - UI layout and color scheme
+  - Interaction mode preferences
+  - Information detail level
+  - Content topic selection
+
+This balances automated adaptation with user control.
+
+### 2. Multi-modal Interaction
+For balancing voice and traditional controls:
+
+- **Parallel Input Options**: All voice commands have UI equivalents
+- **Mode Switching**: Easy toggle between voice-primary and UI-primary modes
+- **Context-Aware Defaults**: Auto-select appropriate input method based on context
+- **Hybrid Interactions**: Support for combined voice+touch interactions
+- **Persistent Preferences**: Remember user's preferred interaction mode
+
+This accommodates different user preferences while maintaining accessibility.
+
+### 3. Error Recovery
+For voice interaction failures:
+
+- **Graceful Text Fallback**: Automatic transition to text when voice fails
+- **Clear Error Explanation**: Plain language explanation of what went wrong
+- **Recovery Suggestions**: Specific actions to resolve the issue
+- **Alternative Route Offering**: Alternate paths to complete the task
+- **Persistent Context**: Maintain conversation context across fallbacks
+
+Implement progressive enhancement where core functionality works without voice.
+
+## Technical Details
+
+### 1. State Persistence
+States that should persist between sessions:
+
+- **User Preferences**: Voice settings, UI preferences, schedule preferences
+- **Conversation Context**: Recent conversation history and topics
+- **Task Status**: Incomplete tasks and related context
+- **Voice Profile**: Voice analysis baselines and models
+- **Session Tokens**: Authentication information (securely stored)
+
+Store this data in Supabase with appropriate encryption and access controls.
+
+### 2. i18n & Localization
+For initial implementation:
+
+- **Structure for Expansion**: Build with i18n framework in place
+- **Focus on English**: Start with robust English support
+- **Provider Capabilities**: Document language support across TTS providers
+- **Extensible Content**: Design content structure for future localization
+- **Cultural Adaptations**: Consider cultural variations in voice interactions
+
+This ensures a solid foundation while allowing for future language expansion.
+
+### 3. Analytics Strategy
+Key metrics to track:
+
+- **Voice Quality Metrics**: TTS clarity, naturalness ratings
+- **Emotion Detection Accuracy**: User-reported vs. detected emotions
+- **Interaction Patterns**: Command types, conversation durations
+- **Error Rates**: Recognition failures, TTS errors, recovery success
+- **Feature Usage**: Which voice features are most/least used
+- **Engagement Metrics**: Call frequency, duration, completion rates
+- **Task Completion**: Success rates for voice-driven tasks
+
+Use these to guide product improvements and features prioritization.
+
+## Development & Deployment
+
+### 1. Team Structure
+I recommend a hybrid structure:
+
+- **Core UI Team**: Responsible for shared components and design system
+- **Feature Teams**: Cross-functional teams for specific features (calls, tasks, etc.)
+- **Voice Technology Team**: Specialists focused on voice interactions
+- **Integration Team**: Experts on connecting to backend services
+- **QA/Testing Team**: Dedicated to voice interaction testing
+
+This balances specialization with integration needs.
+
+### 2. Development Environments
+For effective TTS integration testing:
+
+- **Local Development**: With mock TTS responses for basic UI work
+- **Integration Environment**: Connected to staging backend with limited API quotas
+- **Staging Environment**: Full service integration with test data
+- **Production-like Environment**: Identical to production for final testing
+- **Voice Lab**: Specialized environment for voice quality testing with proper audio equipment
+
+Each developer should have access to all environments with appropriate permissions.
+
+### 3. Performance Benchmarks
+Recommended performance targets:
+
+- **TTS Response Time**: < 500ms from request to first audio
+- **Voice Recognition Latency**: < 300ms from speech end to recognition
+- **UI Responsiveness**: < 100ms for interactive elements
+- **Page Load Time**: < 1.5s for initial load, < 500ms for subsequent navigation
+- **Memory Usage**: < 100MB for mobile web app
+- **Call Setup Time**: < 2s from initiation to first audio
+
+These ensure a responsive experience while accommodating voice processing needs.
+
+Would you like more detailed information on any specific area as you move forward with implementation?

@@ -1,0 +1,12 @@
+node_modules
+.next
+dist
+.DS_Store
+.git
+.gitignore
+Dockerfile*
+docker-compose*.yml
+# Do not ignore .env so that it is included in the build
+.env.local
+.env.development
+!/.env.production 

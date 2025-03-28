@@ -1,0 +1,230 @@
+id: morning_call_workflow
+name: Morning Call Workflow
+summary: Schedule daily morning calls with affirmations
+description: |
+  This workflow sends a morning affirmation via SMS and initiates a
+  phone call to have the user repeat the affirmation and engage in
+  a brief conversation.
+  
+schema:
+  type: object
+  required:
+    - phone_number
+  properties:
+    phone_number:
+      type: string
+      description: The user's phone number in E.164 format (e.g., +15551234567)
+      pattern: "^\\+[1-9]\\d{1,14}$"
+    time:
+      type: string
+      description: Optional. The time to schedule the call (e.g., "08:00"). Default is now.
+      pattern: "^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$"
+      
+path: morning_coffee/morning_call
+language: typescript
+
+triggers:
+  - id: daily_scheduled
+    type: schedule
+    summary: Run this workflow daily at configured time
+    schedule:
+      cron: "0 8 * * *"  # Run daily at 8:00 AM
+
+steps:
+  - id: validate_inputs
+    name: Validate Inputs
+    summary: Validate input parameters
+    language: typescript
+    code: |
+      export async function main(params: {
+        phone_number: string;
+        time?: string;
+      }) {
+        const { phone_number, time } = params;
+        
+        // Validate phone number format (E.164)
+        const phoneRegex = /^\+[1-9]\d{1,14}$/;
+        if (!phoneRegex.test(phone_number)) {
+          throw new Error(`Invalid phone number format: ${phone_number}. Must be in E.164 format (e.g., +15551234567)`);
+        }
+        
+        // Validate time format if provided
+        if (time) {
+          const timeRegex = /^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/;
+          if (!timeRegex.test(time)) {
+            throw new Error(`Invalid time format: ${time}. Must be in HH:MM format (e.g., 08:00)`);
+          }
+        }
+        
+        return {
+          phone_number,
+          time,
+          valid: true
+        };
+      }
+
+  - id: schedule_call
+    name: Schedule Morning Coffee
+    summary: Schedule the morning coffee routine
+    language: typescript
+    code: |
+      export async function main(params: {
+        phone_number: string;
+        time?: string;
+      }) {
+        const { phone_number, time } = params;
+        
+        // Check if we need to schedule for later or execute now
+        if (time) {
+          const now = new Date();
+          const [hours, minutes] = time.split(':').map(Number);
+          
+          const scheduledTime = new Date();
+          scheduledTime.setHours(hours, minutes, 0, 0);
+          
+          // If scheduled time is in the past for today, add delay
+          if (scheduledTime < now) {
+            return {
+              scheduled: true,
+              message: `Call for ${phone_number} will be scheduled for tomorrow at ${time}`,
+              execute: false
+            };
+          }
+          
+          // Calculate delay in milliseconds
+          const delayMs = scheduledTime.getTime() - now.getTime();
+          
+          if (delayMs > 0) {
+            // Schedule for later
+            setTimeout(() => {
+              executeCall(phone_number);
+            }, delayMs);
+            
+            return {
+              scheduled: true,
+              message: `Call for ${phone_number} scheduled for ${time} (in ${Math.round(delayMs / 60000)} minutes)`,
+              execute: false
+            };
+          }
+        }
+        
+        // Execute immediately
+        return executeCall(phone_number);
+      }
+      
+      async function executeCall(phoneNumber: string) {
+        try {
+          // Make the API call to schedule the morning coffee
+          const response = await fetch('http://app:5000/schedule_morning_coffee', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              phone_number: phoneNumber
+            })
+          });
+          
+          if (!response.ok) {
+            throw new Error(`API call failed with status: ${response.status}`);
+          }
+          
+          const result = await response.json();
+          
+          return {
+            scheduled: true,
+            message: `Morning coffee routine initiated for ${phoneNumber}`,
+            execute: true,
+            result
+          };
+        } catch (error) {
+          console.error('Error scheduling call:', error);
+          return {
+            scheduled: false,
+            message: `Failed to schedule call for ${phoneNumber}: ${error.message}`,
+            execute: false,
+            error: error.message
+          };
+        }
+      }
+
+  - id: monitor_call
+    name: Monitor Call Progress
+    summary: Monitor the progress and outcome of the call
+    language: typescript
+    code: |
+      export async function main(params: {
+        result: {
+          scheduled: boolean;
+          message: string;
+          execute: boolean;
+          result?: any;
+          error?: string;
+        }
+      }) {
+        const { result } = params;
+        
+        // If the call was not executed, just return the result
+        if (!result.execute) {
+          return result;
+        }
+        
+        // If the call was executed, monitor its progress
+        const callControlId = result.result?.call_control_id;
+        
+        if (!callControlId) {
+          return {
+            ...result,
+            monitoring: false,
+            status: 'No call control ID available to monitor'
+          };
+        }
+        
+        try {
+          // Check call status after 30 seconds
+          await new Promise(resolve => setTimeout(resolve, 30000));
+          
+          // Make API call to check call status
+          const response = await fetch(`http://app:5000/call_status/${callControlId}`, {
+            method: 'GET'
+          });
+          
+          if (!response.ok) {
+            throw new Error(`API call failed with status: ${response.status}`);
+          }
+          
+          const callStatus = await response.json();
+          
+          return {
+            ...result,
+            monitoring: true,
+            status: callStatus
+          };
+        } catch (error) {
+          console.error('Error monitoring call:', error);
+          return {
+            ...result,
+            monitoring: false,
+            status: `Failed to monitor call: ${error.message}`
+          };
+        }
+      }
+
+  - id: record_outcome
+    name: Record Call Outcome
+    summary: Record the outcome of the morning call
+    language: typescript
+    code: |
+      export async function main(params: any) {
+        // Simply log the complete workflow outcome
+        console.log('Morning call workflow completed with result:', JSON.stringify(params, null, 2));
+        
+        // Here you would typically store the outcome in a database
+        // This is a placeholder for that functionality
+        
+        return {
+          workflow_completed: true,
+          timestamp: new Date().toISOString(),
+          outcome: params
+        };
+      }

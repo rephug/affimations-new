@@ -1,0 +1,2872 @@
+# Comprehensive Guide: Enhancing Morning Coffee with RealtimeTTS
+
+## Table of Contents
+
+1. [Executive Summary](#executive-summary)
+2. [Core Architecture Enhancements](#core-architecture-enhancements)
+   - [Streaming-First Design](#streaming-first-design)
+   - [Text Fragmentation Engine](#text-fragmentation-engine)
+   - [Provider Enhancements](#provider-enhancements)
+   - [Callback and Event System](#callback-and-event-system)
+3. [Performance Optimizations](#performance-optimizations)
+   - [Enhanced Caching System](#enhanced-caching-system)
+   - [Predictive Generation and Prewarming](#predictive-generation-and-prewarming)
+   - [Voice Pooling and Resource Management](#voice-pooling-and-resource-management)
+4. [Advanced Buffering System](#advanced-buffering-system)
+   - [Audio Buffer Class](#audio-buffer-class)
+   - [Audio Player Class](#audio-player-class)
+5. [Telnyx Integration Enhancements](#telnyx-integration-enhancements)
+   - [Streaming Protocol](#streaming-protocol)
+   - [Call Flow Optimization](#call-flow-optimization)
+   - [Error Recovery](#error-recovery)
+6. [Provider Fallback Mechanism](#provider-fallback-mechanism)
+   - [Fallback Manager](#fallback-manager)
+   - [TTSService Integration](#ttsservice-integration)
+7. [Background Processing Improvements](#background-processing-improvements)
+   - [Celery Task Configuration](#celery-task-configuration)
+   - [Asynchronous Processing](#asynchronous-processing)
+8. [Dialog Management](#dialog-management)
+   - [Sentence and Dialog Processing](#sentence-and-dialog-processing)
+   - [Turn-Taking Management](#turn-taking-management)
+9. [Monitoring and Testing](#monitoring-and-testing)
+   - [Latency Benchmarking](#latency-benchmarking)
+   - [Call Quality Metrics](#call-quality-metrics)
+   - [Performance Dashboard](#performance-dashboard)
+10. [Installation and Integration](#installation-and-integration)
+    - [Required Packages](#required-packages)
+    - [Docker Configuration](#docker-configuration)
+    - [Step-by-Step Integration](#step-by-step-integration)
+11. [Performance Tuning Recommendations](#performance-tuning-recommendations)
+12. [Implementation Roadmap](#implementation-roadmap)
+    - [Phase 1: Core Streaming](#phase-1-core-streaming)
+    - [Phase 2: Optimizations](#phase-2-optimizations)
+    - [Phase 3: Enhanced Integrations](#phase-3-enhanced-integrations)
+
+## Executive Summary
+
+After analyzing the Morning Coffee TTS implementation alongside RealtimeTTS capabilities, this guide outlines a comprehensive approach to enhance speech synthesis with streaming support, reduced latency, and improved reliability. The enhancements focus on creating more natural conversational flows, reducing initial response times, and implementing fallback mechanisms for increased resilience.
+
+Key improvements include:
+- Streaming-first architecture for reduced latency
+- Advanced buffering system for smooth playback
+- Provider fallback mechanism for increased reliability
+- Enhanced caching with predictive generation
+- Dialog optimization for natural conversation flow
+- Comprehensive event monitoring system
+- Telnyx streaming integration for improved call quality
+
+## Core Architecture Enhancements
+
+### Streaming-First Design
+
+The current Morning Coffee implementation processes text in batches, which increases initial response times and creates less natural conversations. A streaming-first approach will address these limitations.
+
+#### Audio Streaming Handler
+
+```python
+class AudioStreamHandler:
+    """Manages audio streaming to Telnyx."""
+    
+    def __init__(self, telnyx_handler, buffer_size: int = 4096):
+        self.telnyx_handler = telnyx_handler
+        self.buffer_size = buffer_size
+        self.active_streams = {}
+    
+    async def stream_to_call(self, call_control_id: str, 
+                           audio_generator: Generator[bytes, None, None],
+                           client_state: str) -> bool:
+        """Stream audio chunks to an active call."""
+        try:
+            stream_id = str(uuid.uuid4())
+            self.active_streams[stream_id] = {
+                "call_control_id": call_control_id,
+                "client_state": client_state,
+                "status": "active"
+            }
+            
+            # Start streaming to Telnyx
+            buffer = bytearray()
+            for chunk in audio_generator:
+                buffer.extend(chunk)
+                if len(buffer) >= self.buffer_size:
+                    # Upload chunk
+                    chunk_upload = self.telnyx_handler.upload_to_storage(bytes(buffer))
+                    if not chunk_upload:
+                        raise Exception("Failed to upload audio chunk")
+                        
+                    # Play chunk in call
+                    success = self.telnyx_handler.play_audio(
+                        call_control_id=call_control_id,
+                        audio_url=chunk_upload['url'],
+                        client_state=f"{client_state}:chunk:{stream_id}"
+                    )
+                    if not success:
+                        raise Exception("Failed to play audio chunk")
+                        
+                    # Clear buffer for next chunk
+                    buffer.clear()
+            
+            # Upload any remaining audio
+            if buffer:
+                chunk_upload = self.telnyx_handler.upload_to_storage(bytes(buffer))
+                if chunk_upload:
+                    self.telnyx_handler.play_audio(
+                        call_control_id=call_control_id,
+                        audio_url=chunk_upload['url'],
+                        client_state=f"{client_state}:final:{stream_id}"
+                    )
+            
+            self.active_streams[stream_id]["status"] = "completed"
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error streaming audio to call {call_control_id}: {e}")
+            if stream_id in self.active_streams:
+                self.active_streams[stream_id]["status"] = "failed"
+                self.active_streams[stream_id]["error"] = str(e)
+            return False
+```
+
+### Text Fragmentation Engine
+
+```python
+# modules/tts/text_processing.py
+import re
+import nltk
+from typing import List, Generator, Optional
+
+class TextFragmenter:
+    """Fragment text for real-time processing."""
+    
+    def __init__(self, min_fragment_size: int = 5, 
+                fast_sentence_fragment: bool = True):
+        """
+        Initialize text fragmenter.
+        
+        Args:
+            min_fragment_size: Minimum characters to process
+            fast_sentence_fragment: Enable quick first fragment
+        """
+        self.min_fragment_size = min_fragment_size
+        self.fast_sentence_fragment = fast_sentence_fragment
+        
+        # Download NLTK data if not already present
+        try:
+            nltk.data.find('tokenizers/punkt')
+        except LookupError:
+            nltk.download('punkt')
+    
+    def fragment_text(self, text: str) -> Generator[str, None, None]:
+        """Fragment text into processable chunks for streaming TTS."""
+        # First, check if we should produce a fast first fragment
+        if self.fast_sentence_fragment and len(text) > self.min_fragment_size:
+            # Find the first punctuation after min_fragment_size
+            for i in range(self.min_fragment_size, min(len(text), 30)):
+                if text[i] in '.,:;!? ':
+                    yield text[:i+1]
+                    text = text[i+1:]
+                    break
+        
+        # Use NLTK to find sentence boundaries
+        sentences = nltk.sent_tokenize(text)
+        
+        # Yield sentences as fragments
+        for sentence in sentences:
+            yield sentence
+```
+
+### Provider Enhancements
+
+We need to update the `BaseTTSProvider` to support streaming and add implementations for various providers:
+
+```python
+# Add this method to BaseTTSProvider
+@abstractmethod
+def generate_speech_stream(self, text_fragments: Generator[str, None, None],
+                          voice_id: Optional[str] = None, 
+                          speed: float = 1.0) -> Generator[bytes, None, None]:
+    """
+    Generate speech as a stream from text fragments.
+    
+    Args:
+        text_fragments: Generator of text fragments
+        voice_id: Voice identifier
+        speed: Speech speed factor
+        
+    Returns:
+        Generator of audio chunks as bytes
+    """
+    pass
+```
+
+#### Enhanced Kokoro Provider
+
+```python
+class EnhancedKokoroProvider(StreamingTTSProvider):
+    """Enhanced Kokoro provider with streaming support."""
+    
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # Initialize RealtimeTTS components
+        from RealtimeTTS import TextToAudioStream, KokoroEngine
+        self.engine = KokoroEngine()
+        self.current_voice = None
+        
+        # Stream configuration
+        self.chunk_size = kwargs.get("chunk_size", 1024)
+        self.buffer_threshold = kwargs.get("buffer_threshold", 0.5)  # seconds
+        self.max_sentence_length = kwargs.get("max_sentence_length", 100)
+        
+        # Text processor for sentence splitting
+        self.text_processor = TextProcessor()
+        
+        # Session tracking
+        self.active_sessions = {}
+    
+    def generate_speech_stream(self, text: str, voice_id: Optional[str] = None,
+                             speed: float = 1.0) -> Generator[bytes, None, None]:
+        """Generate speech as a stream of audio chunks."""
+        if voice_id:
+            self.set_voice(voice_id)
+        
+        # Create stream and split text into sentences
+        stream = TextToAudioStream(self.engine, muted=True)
+        
+        # Get the initial fragment for immediate playback
+        initial_fragment = self.text_processor.get_initial_fragment(text)
+        
+        if initial_fragment:
+            # Generate initial fragment immediately
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
+                output_path = temp_file.name
+            
+            stream.feed(initial_fragment)
+            stream.play(output_wavfile=output_path, log_synthesized_text=False)
+            
+            # Read the file in chunks and yield
+            with open(output_path, 'rb') as f:
+                while chunk := f.read(self.chunk_size):
+                    yield chunk
+            
+            # Clean up
+            os.unlink(output_path)
+        
+        # Process remaining text by sentences
+        sentences = self.text_processor.split_into_sentences(text)
+        if initial_fragment and sentences:
+            # Skip first sentence if we already processed the initial fragment
+            remaining_part = sentences[0].replace(initial_fragment, "", 1).strip()
+            if remaining_part:
+                sentences[0] = remaining_part
+            else:
+                sentences = sentences[1:]
+        
+        for sentence in sentences:
+            # Skip empty sentences
+            if not sentence.strip():
+                continue
+                
+            # Process in smaller chunks if sentence is too long
+            if len(sentence) > self.max_sentence_length:
+                chunks = [sentence[i:i+self.max_sentence_length] 
+                        for i in range(0, len(sentence), self.max_sentence_length)]
+            else:
+                chunks = [sentence]
+            
+            for chunk in chunks:
+                with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
+                    output_path = temp_file.name
+                
+                stream.feed(chunk)
+                stream.play(output_wavfile=output_path, log_synthesized_text=False)
+                
+                # Read the file in chunks and yield
+                with open(output_path, 'rb') as f:
+                    while file_chunk := f.read(self.chunk_size):
+                        yield file_chunk
+                
+                # Clean up
+                os.unlink(output_path)
+```
+
+#### Google Chirp3 Support
+
+```python
+class EnhancedGoogleProvider(StreamingTTSProvider):
+    """Enhanced Google provider with Chirp3 and streaming support."""
+    
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        
+        # Initialize Google Cloud TTS client
+        from google.cloud import texttospeech
+        
+        self.credentials_path = kwargs.get("credentials_path")
+        if self.credentials_path:
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = self.credentials_path
+        
+        self.client = texttospeech.TextToSpeechClient()
+        
+        # Enable Chirp3 streaming
+        self.use_chirp3 = kwargs.get("use_chirp3", True)
+        if self.use_chirp3:
+            # Use newer Chirp3 models for better quality and latency
+            self.chirp3_voices = [
+                "en-US-Chirp3-Standard-F",
+                "en-US-Chirp3-Standard-M",
+                "en-US-Chirp3-Polyglot",
+                "en-US-Chirp3-Studio"
+            ]
+        
+        # Stream configuration
+        self.chunk_size = kwargs.get("chunk_size", 1024)
+        
+        # Session tracking
+        self.active_sessions = {}
+    
+    def generate_speech_stream(self, text: str, voice_id: Optional[str] = None,
+                            speed: float = 1.0) -> Generator[bytes, None, None]:
+        """Generate speech as a stream of audio chunks."""
+        # Set voice if provided
+        if voice_id:
+            self.set_voice(voice_id)
+        
+        # Create TextProcessor for sentence splitting
+        text_processor = TextProcessor()
+        sentences = text_processor.split_into_sentences(text)
+        
+        for sentence in sentences:
+            # Configure input
+            synthesis_input = texttospeech.SynthesisInput(text=sentence)
+            
+            # Build voice
+            voice = texttospeech.VoiceSelectionParams(
+                language_code=self.voice_config["language_code"],
+                name=self.voice_config["name"],
+                ssml_gender=self.voice_config["ssml_gender"]
+            )
+            
+            # Set audio config
+            audio_config = texttospeech.AudioConfig(
+                audio_encoding=texttospeech.AudioEncoding.LINEAR16,
+                speaking_rate=speed,
+                sample_rate_hertz=24000
+            )
+            
+            # Perform text-to-speech request
+            response = self.client.synthesize_speech(
+                input=synthesis_input,
+                voice=voice,
+                audio_config=audio_config
+            )
+            
+            # Yield audio in chunks
+            audio_data = response.audio_content
+            for i in range(0, len(audio_data), self.chunk_size):
+                yield audio_data[i:i+self.chunk_size]
+```
+
+### Callback and Event System
+
+```python
+class TTSEventEmitter:
+    """Event emitter for TTS system events."""
+    
+    def __init__(self):
+        self.event_handlers = defaultdict(list)
+    
+    def on(self, event: str, handler: Callable) -> None:
+        """Register a handler for an event."""
+        self.event_handlers[event].append(handler)
+    
+    def off(self, event: str, handler: Callable) -> None:
+        """Remove a handler for an event."""
+        if event in self.event_handlers and handler in self.event_handlers[event]:
+            self.event_handlers[event].remove(handler)
+    
+    def emit(self, event: str, *args, **kwargs) -> None:
+        """Emit an event to all registered handlers."""
+        for handler in self.event_handlers.get(event, []):
+            try:
+                handler(*args, **kwargs)
+            except Exception as e:
+                logger.error(f"Error in event handler for {event}: {e}")
+
+# Integrate the event emitter into the TTS service
+class EnhancedTTSService(TTSService):
+    """Enhanced TTS service with event system."""
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.events = TTSEventEmitter()
+        
+        # Define standard events
+        self.EVENT_GENERATION_START = "generation:start"
+        self.EVENT_GENERATION_COMPLETE = "generation:complete"
+        self.EVENT_GENERATION_ERROR = "generation:error"
+        self.EVENT_AUDIO_CHUNK = "audio:chunk"
+        self.EVENT_AUDIO_COMPLETE = "audio:complete"
+        self.EVENT_CACHE_HIT = "cache:hit"
+        self.EVENT_CACHE_MISS = "cache:miss"
+        self.EVENT_PROVIDER_CHANGE = "provider:change"
+        
+        # Register default handlers for logging
+        self._register_default_handlers()
+    
+    def _register_default_handlers(self):
+        """Register default event handlers."""
+        # Log generation start and end
+        self.events.on(self.EVENT_GENERATION_START, 
+                      lambda text, provider: logger.debug(f"Starting generation of: {text[:30]}..."))
+        self.events.on(self.EVENT_GENERATION_COMPLETE,
+                      lambda duration: logger.debug(f"Generation completed in {duration:.2f}s"))
+        self.events.on(self.EVENT_GENERATION_ERROR, 
+                      lambda error: logger.error(f"Generation error: {error}"))
+```
+
+## Performance Optimizations
+
+### Enhanced Caching System
+
+```python
+class TTSCacheManager:
+    """Enhanced cache manager for TTS with multiple layers and strategies."""
+    
+    def __init__(self, redis_client=None, cache_dir=None, ttl=86400, 
+                memory_cache_size=100, preload_common=True):
+        self.redis_client = redis_client
+        self.cache_dir = cache_dir
+        self.ttl = ttl
+        
+        # In-memory LRU cache for fastest access
+        self.memory_cache = OrderedDict()
+        self.memory_cache_size = memory_cache_size
+        
+        # Stats
+        self.hits = {
+            "memory": 0,
+            "redis": 0,
+            "file": 0,
+            "miss": 0
+        }
+        
+        # Create cache directory if needed
+        if self.cache_dir and not os.path.exists(self.cache_dir):
+            os.makedirs(self.cache_dir)
+            
+        # Preload common phrases if enabled
+        if preload_common:
+            self.preload_common_phrases()
+    
+    def preload_common_phrases(self):
+        """Preload common phrases into memory cache."""
+        common_phrases = [
+            "Hello, how are you today?",
+            "Your affirmation for today is",
+            "Please repeat after me",
+            "Thank you for your response",
+            "Is there anything else you'd like to discuss?"
+        ]
+        
+        # This is just placeholder - actual implementation would load these
+        # from the persistent cache into memory
+        for phrase in common_phrases:
+            key = self._hash_key(phrase)
+            file_path = os.path.join(self.cache_dir, f"{key}.wav")
+            if os.path.exists(file_path):
+                with open(file_path, 'rb') as f:
+                    self.memory_cache[key] = f.read()
+    
+    def get(self, key: str) -> Optional[bytes]:
+        """Get cached audio data from any cache layer."""
+        # Try memory cache first (fastest)
+        if key in self.memory_cache:
+            self.hits["memory"] += 1
+            # Move to end for LRU behavior
+            value = self.memory_cache.pop(key)
+            self.memory_cache[key] = value
+            return value
+        
+        # Try Redis next
+        if self.redis_client:
+            data = self.redis_client.get(key)
+            if data:
+                self.hits["redis"] += 1
+                # Add to memory cache
+                self._add_to_memory_cache(key, data)
+                return data
+        
+        # Try filesystem last
+        if self.cache_dir:
+            file_path = os.path.join(self.cache_dir, f"{key}.wav")
+            if os.path.exists(file_path):
+                # Check if file is expired
+                mtime = os.path.getmtime(file_path)
+                if time.time() - mtime <= self.ttl:
+                    with open(file_path, 'rb') as f:
+                        data = f.read()
+                        self.hits["file"] += 1
+                        # Add to memory and Redis caches
+                        self._add_to_memory_cache(key, data)
+                        if self.redis_client:
+                            self.redis_client.setex(key, self.ttl, data)
+                        return data
+                else:
+                    # Remove expired file
+                    os.unlink(file_path)
+        
+        # Cache miss
+        self.hits["miss"] += 1
+        return None
+    
+    def set(self, key: str, data: bytes) -> bool:
+        """Set cached audio data in all cache layers."""
+        success = False
+        
+        # Add to memory cache
+        self._add_to_memory_cache(key, data)
+        success = True
+        
+        # Add to Redis if available
+        if self.redis_client:
+            try:
+                self.redis_client.setex(key, self.ttl, data)
+            except Exception as e:
+                logger.warning(f"Failed to cache in Redis: {e}")
+        
+        # Add to filesystem if enabled
+        if self.cache_dir:
+            try:
+                file_path = os.path.join(self.cache_dir, f"{key}.wav")
+                with open(file_path, 'wb') as f:
+                    f.write(data)
+            except Exception as e:
+                logger.warning(f"Failed to cache to filesystem: {e}")
+        
+        return success
+    
+    def _add_to_memory_cache(self, key: str, data: bytes) -> None:
+        """Add or update an item in the memory cache."""
+        # If cache is full, remove the oldest item (first in)
+        if len(self.memory_cache) >= self.memory_cache_size:
+            self.memory_cache.popitem(last=False)
+        
+        # Add the new item
+        self.memory_cache[key] = data
+    
+    def _hash_key(self, text: str) -> str:
+        """Generate a hash key for cache lookup."""
+        return hashlib.md5(text.encode()).hexdigest()
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """Get cache statistics."""
+        total_hits = sum(self.hits.values())
+        hit_ratio = 0
+        if total_hits > 0:
+            hit_ratio = (total_hits - self.hits["miss"]) / total_hits * 100
+        
+        return {
+            "hits": self.hits,
+            "memory_cache_size": len(self.memory_cache),
+            "memory_cache_limit": self.memory_cache_size,
+            "hit_ratio": hit_ratio,
+            "filesystem_cache_size": self._get_filesystem_cache_size() if self.cache_dir else 0
+        }
+    
+    def _get_filesystem_cache_size(self) -> int:
+        """Get size of filesystem cache in bytes."""
+        total_size = 0
+        for filename in os.listdir(self.cache_dir):
+            if filename.endswith('.wav'):
+                file_path = os.path.join(self.cache_dir, filename)
+                total_size += os.path.getsize(file_path)
+        return total_size
+```
+
+### Predictive Generation and Prewarming
+
+```python
+class PredictiveGenerator:
+    """Generates audio for likely next phrases in advance."""
+    
+    def __init__(self, tts_service, cache_manager):
+        self.tts_service = tts_service
+        self.cache_manager = cache_manager
+        self.call_flow_patterns = {}
+        self.active_predictions = {}
+    
+    def register_call_flow(self, flow_name: str, flow_steps: List[Dict[str, Any]]) -> None:
+        """Register a call flow pattern for prediction."""
+        self.call_flow_patterns[flow_name] = flow_steps
+    
+    def track_current_step(self, call_id: str, flow_name: str, step_id: str) -> None:
+        """Track the current step for a call to predict next steps."""
+        if flow_name not in self.call_flow_patterns:
+            return
+            
+        # Store call state
+        self.active_predictions[call_id] = {
+            "flow": flow_name,
+            "current_step": step_id,
+            "last_updated": time.time()
+        }
+        
+        # Generate predictions asynchronously
+        self._generate_predictions(call_id)
+    
+    def _generate_predictions(self, call_id: str) -> None:
+        """Generate audio for predicted next steps."""
+        if call_id not in self.active_predictions:
+            return
+            
+        prediction = self.active_predictions[call_id]
+        flow_name = prediction["flow"]
+        current_step = prediction["current_step"]
+        
+        # Find current step in flow
+        flow = self.call_flow_patterns.get(flow_name, [])
+        current_step_index = -1
+        for i, step in enumerate(flow):
+            if step.get("id") == current_step:
+                current_step_index = i
+                break
+        
+        if current_step_index == -1 or current_step_index >= len(flow) - 1:
+            return
+            
+        # Get next steps to predict
+        next_steps = flow[current_step_index + 1:current_step_index + 3]
+        
+        # Generate audio for each possible next step
+        for step in next_steps:
+            template = step.get("template")
+            if not template:
+                continue
+                
+            # Handle template variables with placeholders for now
+            text = template.replace("{user_name}", "User")
+            
+            # Check if already cached
+            cache_key = self.tts_service._get_cache_key(text, step.get("voice_id"), 1.0)
+            if self.cache_manager.get(cache_key):
+                # Already cached
+                continue
+                
+            try:
+                # Generate speech in background
+                Thread(
+                    target=self.tts_service.generate_speech,
+                    args=(text, step.get("voice_id"), 1.0),
+                    daemon=True
+                ).start()
+            except Exception as e:
+                logger.error(f"Error in predictive generation: {e}")
+```
+
+### Voice Pooling and Resource Management
+
+```python
+class VoicePoolManager:
+    """Manages a pool of pre-initialized TTS voices for faster response."""
+    
+    def __init__(self, provider_factory, max_pool_size=5, ttl=300):
+        self.provider_factory = provider_factory
+        self.max_pool_size = max_pool_size
+        self.ttl = ttl  # Time to live in seconds
+        
+        # Voice pools by provider type and voice ID
+        self.voice_pools = {}
+        
+        # Stats
+        self.hits = 0
+        self.misses = 0
+    
+    def get_provider(self, provider_type: str, voice_id: str, 
+                   config: Optional[Dict[str, Any]] = None) -> BaseTTSProvider:
+        """Get a pre-initialized provider with the specified voice."""
+        pool_key = f"{provider_type}:{voice_id or 'default'}"
+        
+        # Check if we have this provider/voice in the pool
+        if pool_key in self.voice_pools:
+            pool = self.voice_pools[pool_key]
+            
+            # Check for available provider in the pool
+            for i, provider_info in enumerate(pool):
+                if not provider_info["in_use"] and time.time() - provider_info["last_used"] < self.ttl:
+                    # Mark as in use
+                    pool[i]["in_use"] = True
+                    pool[i]["last_used"] = time.time()
+                    
+                    self.hits += 1
+                    return provider_info["provider"]
+        else:
+            # Create a new pool for this provider/voice
+            self.voice_pools[pool_key] = []
+        
+        # No available provider, create a new one
+        self.misses += 1
+        provider = self.provider_factory.create_provider(provider_type, None, config)
+        if voice_id:
+            provider.set_voice(voice_id)
+        
+        # Add to pool if not full
+        pool = self.voice_pools[pool_key]
+        if len(pool) < self.max_pool_size:
+            pool.append({
+                "provider": provider,
+                "in_use": True,
+                "created_at": time.time(),
+                "last_used": time.time()
+            })
+        
+        return provider
+    
+    def release_provider(self, provider: BaseTTSProvider) -> None:
+        """Release a provider back to the pool."""
+        for pool_key, pool in self.voice_pools.items():
+            for i, provider_info in enumerate(pool):
+                if provider_info["provider"] is provider:
+                    pool[i]["in_use"] = False
+                    pool[i]["last_used"] = time.time()
+                    return
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """Get pool statistics."""
+        total_requests = self.hits + self.misses
+        hit_ratio = 0
+        if total_requests > 0:
+            hit_ratio = self.hits / total_requests * 100
+            
+        pool_stats = {}
+        for pool_key, pool in self.voice_pools.items():
+            in_use_count = sum(1 for p in pool if p["in_use"])
+            available_count = len(pool) - in_use_count
+            
+            pool_stats[pool_key] = {
+                "total": len(pool),
+                "in_use": in_use_count,
+                "available": available_count
+            }
+            
+        return {
+            "hits": self.hits,
+            "misses": self.misses,
+            "hit_ratio": hit_ratio,
+            "pools": pool_stats
+        }
+```
+
+## Advanced Buffering System
+
+### Audio Buffer Class
+
+```python
+# modules/tts/audio_buffer.py
+import time
+import threading
+from typing import List, Optional, Callable
+
+class AudioBuffer:
+    """Buffer for streaming audio playback."""
+    
+    def __init__(self, buffer_threshold_seconds: float = 0.5,
+                max_buffer_seconds: float = 3.0,
+                sample_rate: int = 24000):
+        """
+        Initialize audio buffer.
+        
+        Args:
+            buffer_threshold_seconds: Minimum buffering before playback
+            max_buffer_seconds: Maximum buffer size in seconds
+            sample_rate: Audio sample rate
+        """
+        self.buffer: List[bytes] = []
+        self.buffer_threshold_seconds = buffer_threshold_seconds
+        self.max_buffer_seconds = max_buffer_seconds
+        self.sample_rate = sample_rate
+        self.bytes_per_second = 2 * sample_rate  # 16-bit audio = 2 bytes per sample
+        
+        self.ready_event = threading.Event()
+        self.buffer_lock = threading.Lock()
+        
+        # Callbacks
+        self.on_buffer_ready: Optional[Callable] = None
+        self.on_buffer_empty: Optional[Callable] = None
+        
+    def add_chunk(self, chunk: bytes) -> None:
+        """
+        Add audio chunk to buffer.
+        
+        Args:
+            chunk: Audio data chunk
+        """
+        with self.buffer_lock:
+            self.buffer.append(chunk)
+            
+            # Calculate current buffer size in seconds
+            buffer_size_bytes = sum(len(c) for c in self.buffer)
+            buffer_size_seconds = buffer_size_bytes / self.bytes_per_second
+            
+            # If buffer exceeds threshold, signal ready
+            if buffer_size_seconds >= self.buffer_threshold_seconds:
+                if not self.ready_event.is_set():
+                    self.ready_event.set()
+                    if self.on_buffer_ready:
+                        self.on_buffer_ready()
+            
+            # If buffer exceeds max size, trim oldest chunks
+            while buffer_size_seconds > self.max_buffer_seconds:
+                removed = self.buffer.pop(0)
+                buffer_size_bytes -= len(removed)
+                buffer_size_seconds = buffer_size_bytes / self.bytes_per_second
+    
+    def get_chunk(self) -> Optional[bytes]:
+        """
+        Get next audio chunk from buffer.
+        
+        Returns:
+            Audio chunk or None if buffer is empty
+        """
+        with self.buffer_lock:
+            if not self.buffer:
+                self.ready_event.clear()
+                if self.on_buffer_empty:
+                    self.on_buffer_empty()
+                return None
+            
+            return self.buffer.pop(0)
+    
+    def wait_until_ready(self, timeout: Optional[float] = None) -> bool:
+        """
+        Wait until buffer has enough data.
+        
+        Args:
+            timeout: Maximum time to wait in seconds
+            
+        Returns:
+            True if buffer is ready, False if timeout
+        """
+        return self.ready_event.wait(timeout)
+    
+    def clear(self) -> None:
+        """Clear the buffer."""
+        with self.buffer_lock:
+            self.buffer.clear()
+            self.ready_event.clear()
+```
+
+### Audio Player Class
+
+```python
+# modules/tts/audio_player.py
+import threading
+import pyaudio
+import time
+from typing import Optional, Generator, Callable
+
+from .audio_buffer import AudioBuffer
+
+class AudioPlayer:
+    """Player for streaming audio playback."""
+    
+    def __init__(self, format: int = pyaudio.paInt16, 
+                channels: int = 1, 
+                rate: int = 24000,
+                chunk_size: int = 1024,
+                buffer_threshold_seconds: float = 0.5):
+        """
+        Initialize audio player.
+        
+        Args:
+            format: PyAudio format
+            channels: Number of audio channels
+            rate: Sample rate
+            chunk_size: Size of audio chunks
+            buffer_threshold_seconds: Minimum buffering before playback
+        """
+        self.format = format
+        self.channels = channels
+        self.rate = rate
+        self.chunk_size = chunk_size
+        
+        self.buffer = AudioBuffer(
+            buffer_threshold_seconds=buffer_threshold_seconds,
+            sample_rate=rate
+        )
+        
+        self.p = pyaudio.PyAudio()
+        self.stream = None
+        
+        self.playing = False
+        self.play_thread = None
+        
+        # Callbacks
+        self.on_play_started: Optional[Callable] = None
+        self.on_play_finished: Optional[Callable] = None
+        
+    def start_stream(self) -> None:
+        """Open the audio stream for playback."""
+        if self.stream is None:
+            self.stream = self.p.open(
+                format=self.format,
+                channels=self.channels,
+                rate=self.rate,
+                output=True,
+                frames_per_buffer=self.chunk_size
+            )
+    
+    def stop_stream(self) -> None:
+        """Close the audio stream."""
+        if self.stream is not None:
+            self.stream.stop_stream()
+            self.stream.close()
+            self.stream = None
+    
+    def play_audio(self, audio_generator: Generator[bytes, None, None]) -> None:
+        """
+        Play audio from generator.
+        
+        Args:
+            audio_generator: Generator of audio chunks
+        """
+        # Start a new thread to buffer and play audio
+        if self.play_thread is not None and self.play_thread.is_alive():
+            # Already playing, stop current playback
+            self.stop_playback()
+        
+        self.play_thread = threading.Thread(
+            target=self._play_audio_thread,
+            args=(audio_generator,)
+        )
+        self.play_thread.daemon = True
+        self.play_thread.start()
+    
+    def _play_audio_thread(self, audio_generator: Generator[bytes, None, None]) -> None:
+        """
+        Thread function for audio playback.
+        
+        Args:
+            audio_generator: Generator of audio chunks
+        """
+        self.playing = True
+        
+        # Start buffering
+        buffer_thread = threading.Thread(
+            target=self._buffer_audio_thread,
+            args=(audio_generator,)
+        )
+        buffer_thread.daemon = True
+        buffer_thread.start()
+        
+        # Wait for buffer to fill
+        self.buffer.wait_until_ready()
+        
+        # Start audio stream
+        self.start_stream()
+        
+        if self.on_play_started:
+            self.on_play_started()
+        
+        # Play audio from buffer
+        while self.playing:
+            chunk = self.buffer.get_chunk()
+            if chunk is None:
+                # Buffer is empty, wait for more data
+                if not buffer_thread.is_alive():
+                    # Generator is exhausted, stop playback
+                    break
+                
+                time.sleep(0.01)
+                continue
+            
+            self.stream.write(chunk)
+        
+        # Clean up
+        self.stop_stream()
+        self.buffer.clear()
+        self.playing = False
+        
+        if self.on_play_finished:
+            self.on_play_finished()
+    
+    def _buffer_audio_thread(self, audio_generator: Generator[bytes, None, None]) -> None:
+        """
+        Thread function for audio buffering.
+        
+        Args:
+            audio_generator: Generator of audio chunks
+        """
+        try:
+            for chunk in audio_generator:
+                if not self.playing:
+                    break
+                
+                self.buffer.add_chunk(chunk)
+        except Exception as e:
+            print(f"Error in buffer thread: {e}")
+    
+    def stop_playback(self) -> None:
+        """Stop current audio playback."""
+        self.playing = False
+        if self.play_thread is not None:
+            self.play_thread.join(timeout=1.0)
+        
+        self.stop_stream()
+        self.buffer.clear()
+    
+    def close(self) -> None:
+        """Clean up resources."""
+        self.stop_playback()
+        self.p.terminate()
+```
+
+## Telnyx Integration Enhancements
+
+### Streaming Protocol
+
+```python
+# modules/tts/telnyx_streaming.py
+class TelnyxStreamingManager:
+    """Manager for streaming audio to Telnyx calls."""
+    
+    def __init__(self, telnyx_handler, chunk_duration_ms=500):
+        """
+        Initialize Telnyx streaming manager.
+        
+        Args:
+            telnyx_handler: Telnyx handler for API calls
+            chunk_duration_ms: Approximate duration of each audio chunk
+        """
+        self.telnyx_handler = telnyx_handler
+        self.chunk_duration_ms = chunk_duration_ms
+        
+        # Active streams by call control ID
+        self.active_streams = {}
+        
+        # Lock for thread safety
+        self.lock = threading.RLock()
+    
+    def start_streaming(self, call_control_id: str, 
+                      audio_generator: Generator[bytes, None, None], 
+                      client_state_prefix: str = "stream") -> str:
+        """
+        Start streaming audio to a call.
+        
+        Args:
+            call_control_id: Telnyx call control ID
+            audio_generator: Generator of audio chunks
+            client_state_prefix: Prefix for client state
+            
+        Returns:
+            Stream ID for tracking
+        """
+        with self.lock:
+            # Generate stream ID
+            stream_id = str(uuid.uuid4())
+            
+            # Create stream info
+            stream_info = {
+                "call_control_id": call_control_id,
+                "audio_generator": audio_generator,
+                "client_state_prefix": client_state_prefix,
+                "status": "starting",
+                "chunk_count": 0,
+                "start_time": time.time(),
+                "thread": None
+            }
+            
+            # Start streaming thread
+            thread = threading.Thread(
+                target=self._stream_thread,
+                args=(stream_id, stream_info)
+            )
+            thread.daemon = True
+            
+            stream_info["thread"] = thread
+            thread.start()
+            
+            # Store stream info
+            self.active_streams[stream_id] = stream_info
+            
+            logger.info(f"Started audio stream {stream_id} for call {call_control_id}")
+            return stream_id
+    
+    def _stream_thread(self, stream_id: str, stream_info: Dict[str, Any]) -> None:
+        """
+        Thread function for streaming audio.
+        
+        Args:
+            stream_id: Stream ID
+            stream_info: Stream information
+        """
+        try:
+            call_control_id = stream_info["call_control_id"]
+            audio_generator = stream_info["audio_generator"]
+            client_state_prefix = stream_info["client_state_prefix"]
+            
+            # Update status
+            with self.lock:
+                stream_info["status"] = "active"
+            
+            # Process audio chunks
+            for i, chunk in enumerate(audio_generator):
+                # Check if stream should stop
+                with self.lock:
+                    if stream_id not in self.active_streams or stream_info["status"] == "stopping":
+                        logger.info(f"Stream {stream_id} stopped during processing")
+                        break
+                
+                # Upload audio chunk to Telnyx
+                client_state = f"{client_state_prefix}_{i+1}"
+                
+                # Upload chunk
+                upload_result = self.telnyx_handler.upload_to_storage(
+                    file_data=chunk,
+                    filename=f"{stream_id}_{i+1}.wav"
+                )
+                
+                if not upload_result:
+                    logger.error(f"Failed to upload audio chunk {i+1} for stream {stream_id}")
+                    break
+                
+                # Play audio chunk
+                success = self.telnyx_handler.play_audio(
+                    call_control_id=call_control_id,
+                    audio_url=upload_result["url"],
+                    client_state=client_state
+                )
+                
+                if not success:
+                    logger.error(f"Failed to play audio chunk {i+1} for stream {stream_id}")
+                    break
+                
+                # Update stream info
+                with self.lock:
+                    stream_info["chunk_count"] = i + 1
+                
+                # Wait for playback to complete before sending next chunk
+                # This could be improved with webhook monitoring
+                time.sleep(self.chunk_duration_ms / 1000.0)
+            
+            # Update status
+            with self.lock:
+                stream_info["status"] = "completed"
+                stream_info["end_time"] = time.time()
+            
+            logger.info(f"Stream {stream_id} completed with {stream_info['chunk_count']} chunks")
+            
+        except Exception as e:
+            logger.error(f"Error in stream thread {stream_id}: {e}")
+            
+            # Update status
+            with self.lock:
+                stream_info["status"] = "error"
+                stream_info["error"] = str(e)
+                stream_info["end_time"] = time.time()
+```
+
+### Call Flow Optimization
+
+To enhance the call flow in the webhook handler:
+
+```python
+# app/webhook_blueprint.py
+
+# Update in telnyx_call_webhook function
+# After initializing services
+
+# Initialize TTS streaming manager
+tts_streaming_manager = current_app.config.get('TTS_STREAMING_MANAGER')
+if not tts_streaming_manager and telnyx_handler:
+    from modules.tts.telnyx_streaming import TelnyxStreamingManager
+    tts_streaming_manager = TelnyxStreamingManager(telnyx_handler)
+    current_app.config['TTS_STREAMING_MANAGER'] = tts_streaming_manager
+
+# When handling call.answered event:
+if event_type == 'call.answered':
+    # ... existing code ...
+    
+    # Generate greeting message
+    greeting = f"Hello {user.name}, this is your morning coffee. Today's affirmation is: {call_session.affirmation}"
+    
+    # For streaming approach
+    if tts_streaming_manager:
+        # Get streaming generator from TTS service
+        audio_generator = tts_service.generate_speech_stream(
+            text=greeting, 
+            voice_id="default_female"
+        )
+        
+        # Start streaming
+        stream_id = tts_streaming_manager.start_streaming(
+            call_control_id=call_control_id,
+            audio_generator=audio_generator,
+            client_state_prefix="greeting"
+        )
+        
+        # Store stream ID in call session
+        call_session.stream_id = stream_id
+        redis_store.update_call_session(call_session)
+        
+        return jsonify({"status": "streaming started"})
+    else:
+        # Fall back to non-streaming approach
+        # ... existing code ...
+```
+
+### Error Recovery
+
+```python
+# Add this method to TelnyxStreamingManager
+def handle_playback_error(self, stream_id: str, chunk_index: int) -> bool:
+    """
+    Handle playback error by retrying or falling back.
+    
+    Args:
+        stream_id: Stream ID
+        chunk_index: Failed chunk index
+        
+    Returns:
+        True if recovery successful, False otherwise
+    """
+    with self.lock:
+        if stream_id not in self.active_streams:
+            return False
+            
+        stream_info = self.active_streams[stream_id]
+        
+        # Add retry information
+        if "retries" not in stream_info:
+            stream_info["retries"] = {}
+            
+        if chunk_index not in stream_info["retries"]:
+            stream_info["retries"][chunk_index] = 0
+            
+        retry_count = stream_info["retries"][chunk_index]
+        
+        # Limit retries
+        if retry_count >= 3:
+            logger.warning(f"Maximum retries reached for chunk {chunk_index} in stream {stream_id}")
+            return False
+            
+        # Increment retry count
+        stream_info["retries"][chunk_index] += 1
+        
+        # Attempt recovery
+        call_control_id = stream_info["call_control_id"]
+        
+        # Find the chunk in uploaded chunks
+        chunk_key = f"{stream_id}_{chunk_index}.wav"
+        
+        # Attempt to retry playback
+        client_state = f"{stream_info['client_state_prefix']}_{chunk_index}_retry_{retry_count}"
+        
+        try:
+            # Retry playback
+            success = self.telnyx_handler.play_audio(
+                call_control_id=call_control_id,
+                audio_url=f"https://storage.telnyx.com/{chunk_key}",
+                client_state=client_state
+            )
+            
+            return success
+        except Exception as e:
+            logger.error(f"Error in playback recovery: {e}")
+            return False
+```
+
+## Provider Fallback Mechanism
+
+### Fallback Manager
+
+```python
+class TTSFallbackManager:
+    """Manage TTS provider fallbacks."""
+    
+    def __init__(self, primary_provider: str, 
+                fallback_providers: List[str],
+                redis_client=None,
+                provider_configs: Dict[str, Dict[str, Any]] = None):
+        """
+        Initialize fallback manager.
+        
+        Args:
+            primary_provider: Primary provider name
+            fallback_providers: List of fallback provider names
+            redis_client: Redis client for caching
+            provider_configs: Configuration for providers
+        """
+        self.primary_provider_name = primary_provider
+        self.fallback_provider_names = fallback_providers
+        self.redis_client = redis_client
+        self.provider_configs = provider_configs or {}
+        
+        # Initialize providers
+        self.primary_provider = self._create_provider(primary_provider)
+        self.fallback_providers = [
+            self._create_provider(provider_name)
+            for provider_name in fallback_providers
+        ]
+        
+        # Filter out failed providers
+        self.fallback_providers = [p for p in self.fallback_providers if p is not None]
+        
+        # Current active provider
+        self.current_provider = self.primary_provider
+        self.current_provider_name = primary_provider
+        
+        logger.info(f"Fallback manager initialized with primary: {primary_provider}, " +
+                   f"fallbacks: {fallback_providers}")
+    
+    def _create_provider(self, provider_name: str) -> Optional[BaseTTSProvider]:
+        """
+        Create provider instance.
+        
+        Args:
+            provider_name: Provider name
+            
+        Returns:
+            Provider instance or None if creation failed
+        """
+        try:
+            config = self.provider_configs.get(provider_name, {})
+            
+            provider = TTSProviderFactory.create_provider(
+                provider_name, self.redis_client, config
+            )
+            
+            return provider
+        except Exception as e:
+            logger.error(f"Failed to create provider {provider_name}: {e}")
+            return None
+    
+    def get_provider(self) -> BaseTTSProvider:
+        """
+        Get current active provider.
+        
+        Returns:
+            Current provider
+        """
+        return self.current_provider
+    
+    def try_fallback(self) -> bool:
+        """
+        Try to fall back to next provider.
+        
+        Returns:
+            True if fallback successful, False if all providers failed
+        """
+        if not self.fallback_providers:
+            return False
+        
+        # Switch to next fallback provider
+        self.current_provider = self.fallback_providers.pop(0)
+        self.current_provider_name = self.current_provider.__class__.__name__.lower()
+        
+        logger.info(f"Falling back to provider: {self.current_provider_name}")
+        return True
+    
+    def reset_to_primary(self) -> bool:
+        """
+        Reset to primary provider.
+        
+        Returns:
+            True if reset successful, False if primary provider failed
+        """
+        if self.primary_provider is None:
+            return False
+        
+        try:
+            # Check if primary provider is healthy
+            health = self.primary_provider.health_check()
+            if health.get("status") not in ["healthy", "ok"]:
+                return False
+            
+            # Reset to primary
+            self.current_provider = self.primary_provider
+            self.current_provider_name = self.primary_provider_name
+            
+            # Recreate fallback providers
+            self.fallback_providers = [
+                self._create_provider(provider_name)
+                for provider_name in self.fallback_provider_names
+            ]
+            
+            # Filter out failed providers
+            self.fallback_providers = [p for p in self.fallback_providers if p is not None]
+            
+            logger.info(f"Reset to primary provider: {self.primary_provider_name}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to reset to primary provider: {e}")
+            return False
+```
+
+### TTSService Integration
+
+```python
+# Update TTSService initialization
+def __init__(self, redis_client=None, telnyx_handler=None, config=None):
+    self.redis_client = redis_client
+    self.telnyx_handler = telnyx_handler
+    self.config = config or {}
+    
+    # Initialize event emitter
+    self.events = TTSEventEmitter()
+    
+    # Get providers configuration
+    default_provider = self.config.get("default_provider", "kokoro")
+    fallback_providers = self.config.get("fallback_providers", ["piper", "elevenlabs"])
+    provider_configs = self.config.get("provider_config", {})
+    
+    # Create fallback manager
+    self.fallback_manager = TTSFallbackManager(
+        primary_provider=default_provider,
+        fallback_providers=fallback_providers,
+        redis_client=redis_client,
+        provider_configs=provider_configs
+    )
+    
+    # Use provider from fallback manager
+    self.provider = self.fallback_manager.get_provider()
+    
+    # Cache settings
+    self.cache_enabled = self.config.get("cache_enabled", True)
+    self.cache_ttl = self.config.get("cache_ttl", 86400)  # 24 hours default
+    
+    # Voice mapping
+    self.voice_mapping = self.config.get("voice_mapping", {})
+    
+    logger.info(f"TTS Service initialized with provider: {default_provider}")
+
+# Update generate_speech method with fallback
+def generate_speech(self, text: str, voice_id: Optional[str] = None,
+                    speed: float = 1.0, use_cache: bool = True) -> Optional[bytes]:
+    """Generate speech using current provider with fallback."""
+    if not text:
+        logger.warning("Empty text provided, skipping TTS generation")
+        return None
+    
+    # Map voice ID if needed
+    mapped_voice_id = self._map_voice_id(voice_id)
+    
+    # Check cache if enabled and requested
+    cache_key = None
+    if self.cache_enabled and use_cache and self.redis_client:
+        cache_key = self._get_cache_key(text, mapped_voice_id, speed)
+        cached_audio = self.redis_client.get(cache_key)
+        if cached_audio:
+            logger.debug(f"Cache hit for text: {text[:30]}...")
+            return cached_audio
+    
+    # Try with current provider
+    try:
+        audio_data = self.provider.generate_speech(text, mapped_voice_id, speed)
+        
+        # If successful, cache and return
+        if audio_data:
+            if self.cache_enabled and cache_key and self.redis_client:
+                self.redis_client.setex(cache_key, self.cache_ttl, audio_data)
+                logger.debug(f"Cached audio for text: {text[:30]}...")
+            
+            return audio_data
+    except Exception as e:
+        logger.error(f"Error generating speech with provider {self.fallback_manager.current_provider_name}: {e}")
+    
+    # If we get here, the provider failed - try fallbacks
+    while self.fallback_manager.try_fallback():
+        try:
+            # Update provider reference
+            self.provider = self.fallback_manager.get_provider()
+            
+            # Try with fallback provider
+            audio_data = self.provider.generate_speech(text, mapped_voice_id, speed)
+            
+            # If successful, cache and return
+            if audio_data:
+                if self.cache_enabled and cache_key and self.redis_client:
+                    self.redis_client.setex(cache_key, self.cache_ttl, audio_data)
+                    logger.debug(f"Cached audio for text: {text[:30]}...")
+                
+                return audio_data
+        except Exception as e:
+            logger.error(f"Error generating speech with fallback provider {self.fallback_manager.current_provider_name}: {e}")
+    
+    # All providers failed
+    logger.error("All TTS providers failed")
+    return None
+```
+
+## Background Processing Improvements
+
+### Celery Task Configuration
+
+```python
+# modules/tts/tasks.py
+from celery import Celery
+import os
+import redis
+import time
+import logging
+
+logger = logging.getLogger("tts-tasks")
+
+# Initialize Celery app with more specific configuration
+celery_app = Celery('tts_tasks')
+celery_app.conf.update(
+    broker_url=os.environ.get('CELERY_BROKER_URL', 'redis://redis:6379/0'),
+    result_backend=os.environ.get('CELERY_RESULT_BACKEND', 'redis://redis:6379/0'),
+    task_serializer='pickle',  # Use pickle for binary data
+    accept_content=['json', 'pickle'],
+    result_serializer='pickle',
+    task_time_limit=60,  # 1 minute hard limit
+    task_soft_time_limit=30,  # 30 seconds soft limit
+    worker_prefetch_multiplier=1,  # Process one task at a time
+    task_acks_late=True,  # Acknowledge tasks after execution
+    task_reject_on_worker_lost=True,  # Requeue tasks if worker dies
+    task_queues={
+        'tts_high': {'exchange': 'tts', 'routing_key': 'high'},
+        'tts_normal': {'exchange': 'tts', 'routing_key': 'normal'},
+        'tts_low': {'exchange': 'tts', 'routing_key': 'low'}
+    },
+    task_routes={
+        'modules.tts.tasks.generate_speech_task': {'queue': 'tts_high'},
+        'modules.tts.tasks.prewarm_task': {'queue': 'tts_low'}
+    }
+)
+
+# Import provider factory
+from .provider_factory import TTSProviderFactory
+
+@celery_app.task(bind=True, max_retries=3, default_retry_delay=5)
+def generate_speech_task(self, text, provider_type, provider_config, voice_id=None, speed=1.0):
+    """Generate speech in background with retries."""
+    try:
+        # Create Redis client
+        redis_client = redis.Redis.from_url(
+            os.environ.get('REDIS_URL', 'redis://redis:6379/0')
+        )
+        
+        # Create provider
+        provider = TTSProviderFactory.create_provider(
+            provider_type, redis_client, provider_config
+        )
+        
+        # Measure task execution time
+        start_time = time.time()
+        
+        # Set voice if provided
+        if voice_id and provider.voice_exists(voice_id):
+            provider.set_voice(voice_id)
+        
+        # Generate speech
+        audio_data = provider.generate_speech(text, None, speed)
+        
+        # Log completion time
+        execution_time = time.time() - start_time
+        logger.info(f"Generated speech in {execution_time:.2f}s, length: {len(audio_data)} bytes")
+        
+        return audio_data
+    except Exception as e:
+        logger.error(f"Error in generate_speech_task: {e}")
+        # Retry with exponential backoff
+        retry_count = self.request.retries
+        retry_delay = 5 * (2 ** retry_count)  # 5, 10, 20 seconds
+        
+        raise self.retry(exc=e, countdown=retry_delay, max_retries=3)
+```
+
+### Asynchronous Processing
+
+```python
+# modules/tts/tts_service.py
+
+# Add these methods to TTSService
+
+def generate_speech_async(self, text: str, voice_id: Optional[str] = None,
+                         speed: float = 1.0) -> str:
+    """
+    Generate speech asynchronously using Celery.
+    
+    Args:
+        text: Text to convert to speech
+        voice_id: Voice identifier
+        speed: Speech speed factor
+        
+    Returns:
+        Task ID for tracking
+    """
+    from .tasks import generate_speech_task
+    
+    # Map voice ID if needed
+    mapped_voice_id = self._map_voice_id(voice_id)
+    
+    # Get current provider type and config
+    provider_type = self.provider.__class__.__name__.lower().replace('provider', '')
+    provider_config = self.config.get("provider_config", {}).get(provider_type, {})
+    
+    # Submit task to Celery
+    task = generate_speech_task.delay(text, provider_type, provider_config, mapped_voice_id, speed)
+    
+    logger.debug(f"Submitted async TTS task: {task.id}")
+    return task.id
+
+def get_task_result(self, task_id: str) -> Optional[bytes]:
+    """
+    Get result of async TTS task.
+    
+    Args:
+        task_id: Celery task ID
+        
+    Returns:
+        Audio data if task completed, None if pending or failed
+    """
+    from .tasks import generate_speech_task
+    
+    # Get task result
+    task = generate_speech_task.AsyncResult(task_id)
+    
+    if task.ready():
+        if task.successful():
+            return task.get()
+        else:
+            logger.error(f"Task {task_id} failed: {task.result}")
+            return None
+    else:
+        logger.debug(f"Task {task_id} still pending")
+        return None
+```
+
+## Dialog Management
+
+### Sentence and Dialog Processing
+
+```python
+# modules/tts/dialog_manager.py
+import re
+import time
+import nltk
+from typing import List, Dict, Any, Optional, Tuple, Generator
+
+class DialogManager:
+    """
+    Manager for dialog processing and speech synthesis.
+    
+    This class manages the flow of conversation, including:
+    - Breaking text into sentences
+    - Handling pauses between sentences
+    - Managing turn-taking
+    - Optimizing initial response latency
+    """
+    
+    def __init__(self, min_fragment_size: int = 5,
+                inter_sentence_pause_ms: int = 300,
+                minimum_first_fragment_length: int = 15):
+        """
+        Initialize dialog manager.
+        
+        Args:
+            min_fragment_size: Minimum fragment size
+            inter_sentence_pause_ms: Pause between sentences
+            minimum_first_fragment_length: Minimum length of first fragment
+        """
+        self.min_fragment_size = min_fragment_size
+        self.inter_sentence_pause_ms = inter_sentence_pause_ms
+        self.minimum_first_fragment_length = minimum_first_fragment_length
+        
+        # Download NLTK data if not already present
+        try:
+            nltk.data.find('tokenizers/punkt')
+        except LookupError:
+            nltk.download('punkt')
+    
+    def process_text(self, text: str) -> Generator[Tuple[str, int], None, None]:
+        """
+        Process text into fragments with timing information.
+        
+        Args:
+            text: Input text
+            
+        Returns:
+            Generator of (fragment, pause_ms) tuples
+        """
+        # Skip empty text
+        if not text:
+            return
+        
+        # Get quick initial fragment for rapid response
+        if len(text) > self.minimum_first_fragment_length:
+            # Find first sentence fragment to return quickly
+            first_fragment = self._get_first_fragment(text)
+            if first_fragment:
+                yield (first_fragment, 0)
+                
+                # Remove fragment from text
+                text = text[len(first_fragment):].lstrip()
+        
+        # Split remaining text into sentences
+        sentences = nltk.sent_tokenize(text)
+        
+        # Process each sentence
+        for i, sentence in enumerate(sentences):
+            if not sentence.strip():
+                continue
+            
+            # Add pause after sentence (except last)
+            pause = self.inter_sentence_pause_ms if i < len(sentences) - 1 else 0
+            
+            yield (sentence, pause)
+    
+    def _get_first_fragment(self, text: str) -> Optional[str]:
+        """
+        Get first fragment for quick initial response.
+        
+        Args:
+            text: Input text
+            
+        Returns:
+            First fragment or None
+        """
+        # Look for natural breakpoints
+        match = re.search(r'^([^.!?;:]+[,.!?;:])', text)
+        if match and len(match.group(1)) >= self.min_fragment_size:
+            return match.group(1)
+        
+        # If no natural breakpoint, find a good stopping point
+        for i in range(self.minimum_first_fragment_length, min(len(text), 30)):
+            if text[i] in '.,:;!? ':
+                return text[:i+1]
+        
+        # If text is too short, return None for full processing
+        return None
+```
+
+### Turn-Taking Management
+
+```python
+# Add to DialogManager class
+    
+def process_dialog_turn(self, text: str) -> Generator[Dict[str, Any], None, None]:
+    """
+    Process a complete dialog turn.
+    
+    Args:
+        text: Dialog turn text
+        
+    Returns:
+        Generator of fragment info dictionaries
+    """
+    start_time = time.time()
+    
+    # Process text
+    for i, (fragment, pause) in enumerate(self.process_text(text)):
+        # Create fragment info
+        fragment_info = {
+            "fragment": fragment,
+            "index": i,
+            "pause_ms": pause,
+            "time_since_start": time.time() - start_time
+        }
+        
+        yield fragment_info
+        
+        # Apply pause if requested
+        if pause > 0:
+            time.sleep(pause / 1000.0)
+
+# Add to TTSService class
+def initialize_dialog_manager(self):
+    """Initialize dialog manager."""
+    from .dialog_manager import DialogManager
+    
+    self.dialog_manager = DialogManager(
+        min_fragment_size=5,
+        inter_sentence_pause_ms=300,
+        minimum_first_fragment_length=15
+    )
+
+def generate_dialog_speech_stream(self, text: str, voice_id: Optional[str] = None,
+                                speed: float = 1.0) -> Generator[bytes, None, None]:
+    """
+    Generate speech stream for dialog with optimized latency.
+    
+    Args:
+        text: Dialog text
+        voice_id: Voice identifier
+        speed: Speech speed factor
+        
+    Returns:
+        Generator of audio chunks
+    """
+    # Initialize dialog manager if needed
+    if not hasattr(self, 'dialog_manager'):
+        self.initialize_dialog_manager()
+    
+    # Map voice ID if needed
+    mapped_voice_id = self._map_voice_id(voice_id)
+    
+    # Process dialog turn
+    fragments = []
+    for fragment_info in self.dialog_manager.process_dialog_turn(text):
+        fragments.append(fragment_info["fragment"])
+        
+        # Emit fragment processed event
+        self.events.emit(TTSEvent(
+            TTSEventType.FRAGMENT_PROCESSED,
+            {"fragment": fragment_info["fragment"], "position": fragment_info["index"]}
+        ))
+    
+    # Generate speech from fragments
+    try:
+        # Emit synthesis start event
+        self.events.emit(TTSEvent(
+            TTSEventType.SYNTHESIS_START,
+            {"text": text, "voice_id": mapped_voice_id, "speed": speed}
+        ))
+        
+        # Generate speech for each fragment
+        for fragment in fragments:
+            # Generate audio for fragment
+            audio_data = self.provider.generate_speech(fragment, mapped_voice_id, speed)
+            
+            if audio_data:
+                # Emit audio chunk event
+                self.events.emit(TTSEvent(
+                    TTSEventType.AUDIO_CHUNK_GENERATED,
+                    {"chunk_size": len(audio_data)}
+                ))
+                
+                yield audio_data
+        
+        # Emit synthesis end event
+        self.events.emit(TTSEvent(
+            TTSEventType.SYNTHESIS_END,
+            {"text": text, "fragments_count": len(fragments)}
+        ))
+    except Exception as e:
+        logger.error(f"Error generating dialog speech stream: {e}")
+        
+        # Try fallbacks if available
+        if hasattr(self, 'fallback_manager'):
+            while self.fallback_manager.try_fallback():
+                try:
+                    # Update provider reference
+                    self.provider = self.fallback_manager.get_provider()
+                    
+                    # Try with fallback provider
+                    for fragment in fragments:
+                        audio_data = self.provider.generate_speech(fragment, mapped_voice_id, speed)
+                        
+                        if audio_data:
+                            yield audio_data
+                    
+                    # Success with fallback, return
+                    return
+                except Exception as fallback_error:
+                    logger.error(f"Error with fallback provider: {fallback_error}")
+```
+
+## Monitoring and Testing
+
+### Latency Benchmarking
+
+```python
+# modules/tts/benchmarking.py
+import time
+from typing import Dict, Any, List, Optional
+import matplotlib.pyplot as plt
+import numpy as np
+import io
+
+class TTSBenchmark:
+    """Benchmark TTS performance."""
+    
+    def __init__(self, tts_service):
+        self.tts_service = tts_service
+        self.results = []
+    
+    def benchmark_providers(self, text: str, voice_ids: List[str] = None,
+                          test_streaming: bool = True) -> Dict[str, Any]:
+        """
+        Benchmark all providers with the same text.
+        
+        Args:
+            text: Text to synthesize
+            voice_ids: List of voice IDs to test
+            test_streaming: Whether to test streaming
+            
+        Returns:
+            Dictionary of benchmark results
+        """
+        if voice_ids is None:
+            voice_ids = ["default_female", "default_male"]
+        
+        all_results = {}
+        fallback_manager = getattr(self.tts_service, 'fallback_manager', None)
+        
+        if not fallback_manager:
+            # Just test the current provider
+            provider_name = self.tts_service.provider.__class__.__name__.lower()
+            provider_results = self._benchmark_provider(
+                self.tts_service.provider, 
+                provider_name,
+                text, 
+                voice_ids,
+                test_streaming
+            )
+            all_results[provider_name] = provider_results
+            return all_results
+        
+        # Test primary provider
+        primary_name = fallback_manager.primary_provider_name
+        primary_results = self._benchmark_provider(
+            fallback_manager.primary_provider,
+            primary_name,
+            text,
+            voice_ids,
+            test_streaming
+        )
+        all_results[primary_name] = primary_results
+        
+        # Test fallback providers
+        for provider in fallback_manager.fallback_providers:
+            provider_name = provider.__class__.__name__.lower()
+            provider_results = self._benchmark_provider(
+                provider,
+                provider_name,
+                text,
+                voice_ids,
+                test_streaming
+            )
+            all_results[provider_name] = provider_results
+        
+        return all_results
+    
+    def _benchmark_provider(self, provider, provider_name: str, text: str,
+                          voice_ids: List[str], test_streaming: bool) -> Dict[str, Any]:
+        """
+        Benchmark a specific provider.
+        
+        Args:
+            provider: Provider instance
+            provider_name: Provider name
+            text: Text to synthesize
+            voice_ids: Voice IDs to test
+            test_streaming: Whether to test streaming
+            
+        Returns:
+            Benchmark results for this provider
+        """
+        results = {
+            "provider": provider_name,
+            "batch": {},
+            "streaming": {} if test_streaming else None
+        }
+        
+        # Test batch synthesis
+        for voice_id in voice_ids:
+            try:
+                # Warm up
+                provider.generate_speech("Hello world", voice_id)
+                
+                # Benchmark
+                start_time = time.time()
+                audio_data = provider.generate_speech(text, voice_id)
+                end_time = time.time()
+                
+                if audio_data:
+                    results["batch"][voice_id] = {
+                        "success": True,
+                        "time": end_time - start_time,
+                        "audio_size": len(audio_data)
+                    }
+                else:
+                    results["batch"][voice_id] = {
+                        "success": False
+                    }
+            except Exception as e:
+                results["batch"][voice_id] = {
+                    "success": False,
+                    "error": str(e)
+                }
+        
+        # Test streaming synthesis if requested
+        if test_streaming and hasattr(provider, 'generate_speech_stream'):
+            for voice_id in voice_ids:
+                try:
+                    # Create text generator
+                    sentences = text.split('. ')
+                    text_generator = (sentence for sentence in sentences if sentence)
+                    
+                    # Benchmark
+                    start_time = time.time()
+                    first_chunk_time = None
+                    total_audio_size = 0
+                    chunk_count = 0
+                    
+                    for chunk in provider.generate_speech_stream(text_generator, voice_id):
+                        if first_chunk_time is None:
+                            first_chunk_time = time.time()
+                        
+                        total_audio_size += len(chunk)
+                        chunk_count += 1
+                    
+                    end_time = time.time()
+                    
+                    results["streaming"][voice_id] = {
+                        "success": True,
+                        "total_time": end_time - start_time,
+                        "first_chunk_time": first_chunk_time - start_time if first_chunk_time else None,
+                        "audio_size": total_audio_size,
+                        "chunk_count": chunk_count
+                    }
+                except Exception as e:
+                    results["streaming"][voice_id] = {
+                        "success": False,
+                        "error": str(e)
+                    }
+        
+        return results
+    
+    def generate_report(self, results: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Generate a report from benchmark results.
+        
+        Args:
+            results: Benchmark results or None to use last results
+            
+        Returns:
+            Dictionary with report and charts
+        """
+        if results is None:
+            if not self.results:
+                return {"error": "No benchmark results available"}
+            results = self.results[-1]
+        
+        report = {
+            "summary": {},
+            "details": results,
+            "charts": {}
+        }
+        
+        # Generate summary
+        providers = list(results.keys())
+        batch_latencies = []
+        streaming_latencies = []
+        first_chunk_latencies = []
+        
+        for provider_name, provider_results in results.items():
+            # Calculate average batch latency
+            batch_times = []
+            for voice_id, voice_results in provider_results["batch"].items():
+                if voice_results.get("success", False):
+                    batch_times.append(voice_results["time"])
+            
+            if batch_times:
+                avg_batch_time = sum(batch_times) / len(batch_times)
+                batch_latencies.append(avg_batch_time)
+                
+                report["summary"][provider_name] = {
+                    "avg_batch_latency": avg_batch_time
+                }
+            
+            # Calculate average streaming latencies if available
+            if provider_results["streaming"]:
+                streaming_times = []
+                first_chunk_times = []
+                
+                for voice_id, voice_results in provider_results["streaming"].items():
+                    if voice_results.get("success", False):
+                        streaming_times.append(voice_results["total_time"])
+                        if voice_results.get("first_chunk_time") is not None:
+                            first_chunk_times.append(voice_results["first_chunk_time"])
+                
+                if streaming_times:
+                    avg_streaming_time = sum(streaming_times) / len(streaming_times)
+                    streaming_latencies.append(avg_streaming_time)
+                    
+                    report["summary"][provider_name]["avg_streaming_latency"] = avg_streaming_time
+                
+                if first_chunk_times:
+                    avg_first_chunk_time = sum(first_chunk_times) / len(first_chunk_times)
+                    first_chunk_latencies.append(avg_first_chunk_time)
+                    
+                    report["summary"][provider_name]["avg_first_chunk_latency"] = avg_first_chunk_time
+        
+        # Generate charts
+        # Batch latency chart
+        if batch_latencies:
+            fig, ax = plt.subplots(figsize=(10, 6))
+            y_pos = np.arange(len(providers))
+            ax.barh(y_pos, batch_latencies, align='center')
+            ax.set_yticks(y_pos)
+            ax.set_yticklabels(providers)
+            ax.invert_yaxis()  # Labels read top-to-bottom
+            ax.set_xlabel('Time (seconds)')
+            ax.set_title('Batch Synthesis Latency by Provider')
+            
+            buf = io.BytesIO()
+            fig.savefig(buf, format='png')
+            buf.seek(0)
+            
+            report["charts"]["batch_latency"] = buf.getvalue()
+        
+        # Streaming latency chart
+        if streaming_latencies and first_chunk_latencies:
+            fig, ax = plt.subplots(figsize=(10, 6))
+            x = np.arange(len(providers))
+            width = 0.35
+            
+            ax.bar(x - width/2, first_chunk_latencies, width, label='First Chunk Latency')
+            ax.bar(x + width/2, streaming_latencies, width, label='Total Streaming Latency')
+            
+            ax.set_ylabel('Time (seconds)')
+            ax.set_title('Streaming Synthesis Latency by Provider')
+            ax.set_xticks(x)
+            ax.set_xticklabels(providers)
+            ax.legend()
+            
+            buf = io.BytesIO()
+            fig.savefig(buf, format='png')
+            buf.seek(0)
+            
+            report["charts"]["streaming_latency"] = buf.getvalue()
+        
+        return report
+```
+
+### Call Quality Metrics
+
+```python
+# modules/tts/call_metrics.py
+import time
+import threading
+from typing import Dict, Any, List, Optional
+from collections import defaultdict
+import statistics
+
+class CallQualityMonitor:
+    """Monitor and collect TTS call quality metrics."""
+    
+    def __init__(self, tts_service, telynx_streaming_manager):
+        self.tts_service = tts_service
+        self.streaming_manager = telynx_streaming_manager
+        
+        # Register event handlers
+        self.tts_service.events.on("generation:start", self._on_generation_start)
+        self.tts_service.events.on("generation:complete", self._on_generation_complete)
+        self.tts_service.events.on("audio:chunk", self._on_audio_chunk)
+        
+        # Call metrics by call ID
+        self.call_metrics = defaultdict(lambda: {
+            "started_at": time.time(),
+            "generation_times": [],
+            "chunk_latencies": [],
+            "streaming_sessions": {},
+            "errors": []
+        })
+        
+        # Lock for thread safety
+        self.lock = threading.RLock()
+    
+    def _on_generation_start(self, text, provider):
+        """Handle generation start event."""
+        # Record in currently active call if there is one
+        call_id = getattr(self, '_current_call_id', None)
+        if call_id:
+            with self.lock:
+                self.call_metrics[call_id]["last_generation_start"] = time.time()
+                self.call_metrics[call_id]["current_text"] = text[:100]
+    
+    def _on_generation_complete(self, duration):
+        """Handle generation complete event."""
+        call_id = getattr(self, '_current_call_id', None)
+        if call_id:
+            with self.lock:
+                metrics = self.call_metrics[call_id]
+                metrics["generation_times"].append(duration)
+                metrics.pop("last_generation_start", None)
+    
+    def _on_audio_chunk(self, size, stream_id=None):
+        """Handle audio chunk event."""
+        call_id = getattr(self, '_current_call_id', None)
+        if not call_id:
+            return
+            
+        with self.lock:
+            metrics = self.call_metrics[call_id]
+            
+            # If this is part of a streaming session, record in that session
+            if stream_id and stream_id in metrics["streaming_sessions"]:
+                session = metrics["streaming_sessions"][stream_id]
+                session["chunk_count"] += 1
+                session["total_audio_size"] += size
+                
+                # Record first chunk latency if not already recorded
+                if "first_chunk_time" not in session:
+                    start_time = session.get("start_time", 0)
+                    session["first_chunk_time"] = time.time() - start_time
+    
+    def start_call_monitoring(self, call_id: str) -> None:
+        """
+        Start monitoring a call.
+        
+        Args:
+            call_id: Call ID to monitor
+        """
+        with self.lock:
+            self._current_call_id = call_id
+            if call_id not in self.call_metrics:
+                self.call_metrics[call_id] = {
+                    "started_at": time.time(),
+                    "generation_times": [],
+                    "chunk_latencies": [],
+                    "streaming_sessions": {},
+                    "errors": []
+                }
+    
+    def start_streaming_session(self, call_id: str, stream_id: str) -> None:
+        """
+        Start monitoring a streaming session.
+        
+        Args:
+            call_id: Call ID
+            stream_id: Stream ID
+        """
+        with self.lock:
+            if call_id not in self.call_metrics:
+                self.call_metrics[call_id] = {
+                    "started_at": time.time(),
+                    "generation_times": [],
+                    "chunk_latencies": [],
+                    "streaming_sessions": {},
+                    "errors": []
+                }
+            
+            self.call_metrics[call_id]["streaming_sessions"][stream_id] = {
+                "start_time": time.time(),
+                "chunk_count": 0,
+                "total_audio_size": 0
+            }
+    
+    def end_streaming_session(self, call_id: str, stream_id: str) -> None:
+        """
+        End monitoring a streaming session.
+        
+        Args:
+            call_id: Call ID
+            stream_id: Stream ID
+        """
+        with self.lock:
+            if call_id in self.call_metrics and stream_id in self.call_metrics[call_id]["streaming_sessions"]:
+                session = self.call_metrics[call_id]["streaming_sessions"][stream_id]
+                session["end_time"] = time.time()
+                session["total_time"] = session["end_time"] - session["start_time"]
+    
+    def end_call_monitoring(self, call_id: str) -> None:
+        """
+        End monitoring a call.
+        
+        Args:
+            call_id: Call ID
+        """
+        with self.lock:
+            if call_id in self.call_metrics:
+                self.call_metrics[call_id]["ended_at"] = time.time()
+                self.call_metrics[call_id]["total_time"] = (
+                    self.call_metrics[call_id]["ended_at"] - 
+                    self.call_metrics[call_id]["started_at"]
+                )
+            
+            if self._current_call_id == call_id:
+                self._current_call_id = None
+    
+    def record_error(self, call_id: str, error_type: str, error_message: str) -> None:
+        """
+        Record an error.
+        
+        Args:
+            call_id: Call ID
+            error_type: Error type
+            error_message: Error message
+        """
+        with self.lock:
+            if call_id not in self.call_metrics:
+                self.call_metrics[call_id] = {
+                    "started_at": time.time(),
+                    "generation_times": [],
+                    "chunk_latencies": [],
+                    "streaming_sessions": {},
+                    "errors": []
+                }
+            
+            self.call_metrics[call_id]["errors"].append({
+                "type": error_type,
+                "message": error_message,
+                "time": time.time()
+            })
+    
+    def get_call_metrics(self, call_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get metrics for a call.
+        
+        Args:
+            call_id: Call ID
+            
+        Returns:
+            Call metrics or None if not found
+        """
+        with self.lock:
+            if call_id not in self.call_metrics:
+                return None
+            
+            metrics = self.call_metrics[call_id].copy()
+            
+            # Calculate aggregated statistics
+            if metrics["generation_times"]:
+                metrics["avg_generation_time"] = statistics.mean(metrics["generation_times"])
+                metrics["max_generation_time"] = max(metrics["generation_times"])
+                metrics["min_generation_time"] = min(metrics["generation_times"])
+                
+                if len(metrics["generation_times"]) > 1:
+                    metrics["stddev_generation_time"] = statistics.stdev(metrics["generation_times"])
+            
+            # Calculate streaming statistics
+            streaming_sessions = list(metrics["streaming_sessions"].values())
+            first_chunk_times = [s.get("first_chunk_time") for s in streaming_sessions 
+                               if "first_chunk_time" in s]
+            
+            if first_chunk_times:
+                metrics["avg_first_chunk_time"] = statistics.mean(first_chunk_times)
+                metrics["max_first_chunk_time"] = max(first_chunk_times)
+                metrics["min_first_chunk_time"] = min(first_chunk_times)
+            
+            # Calculate error rate
+            metrics["error_count"] = len(metrics["errors"])
+            
+            return metrics
+    
+    def get_aggregated_metrics(self) -> Dict[str, Any]:
+        """
+        Get aggregated metrics across all calls.
+        
+        Returns:
+            Aggregated metrics
+        """
+        with self.lock:
+            all_metrics = {
+                "call_count": len(self.call_metrics),
+                "generation_times": [],
+                "streaming_sessions": 0,
+                "first_chunk_times": [],
+                "errors": 0
+            }
+            
+            for call_id, metrics in self.call_metrics.items():
+                all_metrics["generation_times"].extend(metrics["generation_times"])
+                all_metrics["streaming_sessions"] += len(metrics["streaming_sessions"])
+                all_metrics["errors"] += len(metrics["errors"])
+                
+                for session in metrics["streaming_sessions"].values():
+                    if "first_chunk_time" in session:
+                        all_metrics["first_chunk_times"].append(session["first_chunk_time"])
+            
+            # Calculate statistics
+            if all_metrics["generation_times"]:
+                all_metrics["avg_generation_time"] = statistics.mean(all_metrics["generation_times"])
+                all_metrics["max_generation_time"] = max(all_metrics["generation_times"])
+                all_metrics["min_generation_time"] = min(all_metrics["generation_times"])
+                
+                if len(all_metrics["generation_times"]) > 1:
+                    all_metrics["stddev_generation_time"] = statistics.stdev(all_metrics["generation_times"])
+            
+            if all_metrics["first_chunk_times"]:
+                all_metrics["avg_first_chunk_time"] = statistics.mean(all_metrics["first_chunk_times"])
+                all_metrics["max_first_chunk_time"] = max(all_metrics["first_chunk_times"])
+                all_metrics["min_first_chunk_time"] = min(all_metrics["first_chunk_times"])
+            
+            return all_metrics
+```
+
+### Performance Dashboard
+
+```python
+# app/routes/metrics.py
+from flask import Blueprint, jsonify, request, current_app, render_template
+from modules.tts.benchmarking import TTSBenchmark
+
+metrics_bp = Blueprint('metrics', __name__, url_prefix='/metrics')
+
+@metrics_bp.route('/benchmark', methods=['POST'])
+def run_benchmark():
+    """Run TTS benchmark."""
+    data = request.json or {}
+    
+    # Get TTS service
+    tts_service = current_app.config['TTS_SERVICE']
+    
+    # Create benchmark
+    benchmark = TTSBenchmark(tts_service)
+    
+    # Get benchmark parameters
+    text = data.get('text', 'Hello, this is a benchmark test for text-to-speech synthesis.')
+    voice_ids = data.get('voice_ids', ["default_female", "default_male"])
+    test_streaming = data.get('test_streaming', True)
+    
+    # Run benchmark
+    results = benchmark.benchmark_providers(text, voice_ids, test_streaming)
+    
+    # Generate report
+    report = benchmark.generate_report(results)
+    
+    return jsonify(report)
+
+@metrics_bp.route('/call_quality/<call_id>', methods=['GET'])
+def get_call_quality(call_id):
+    """Get call quality metrics."""
+    # Get call quality monitor
+    call_quality_monitor = current_app.config.get('CALL_QUALITY_MONITOR')
+    
+    if not call_quality_monitor:
+        return jsonify({"error": "Call quality monitoring not enabled"}), 404
+    
+    # Get metrics
+    metrics = call_quality_monitor.get_call_metrics(call_id)
+    
+    if not metrics:
+        return jsonify({"error": "Call not found"}), 404
+    
+    return jsonify(metrics)
+
+@metrics_bp.route('/call_quality', methods=['GET'])
+def get_all_call_quality():
+    """Get aggregated call quality metrics."""
+    # Get call quality monitor
+    call_quality_monitor = current_app.config.get('CALL_QUALITY_MONITOR')
+    
+    if not call_quality_monitor:
+        return jsonify({"error": "Call quality monitoring not enabled"}), 404
+    
+    # Get metrics
+    metrics = call_quality_monitor.get_aggregated_metrics()
+    
+    return jsonify(metrics)
+
+@metrics_bp.route('/dashboard')
+def metrics_dashboard():
+    """Render metrics dashboard."""
+    return render_template('metrics_dashboard.html')
+```
+
+## Installation and Integration
+
+### Required Packages
+
+Add these dependencies to your `requirements.txt`:
+
+```
+# RealtimeTTS integration
+RealtimeTTS==1.1.0
+nltk==3.8.1
+pydub==0.25.1
+pyaudio==0.2.13
+scikit-learn==1.3.0
+matplotlib==3.7.2
+google-cloud-texttospeech==2.14.1
+anthropic==0.7.0
+```
+
+### Docker Configuration
+
+Update `docker-compose.yml` to include the necessary libraries:
+
+```yaml
+# app service
+app:
+  # ... existing config ...
+  build:
+    context: ./app
+    dockerfile: Dockerfile
+    args:
+      - INSTALL_REALTIMETTS=true
+  environment:
+    # ... existing env vars ...
+    # TTS Configuration
+    - TTS_PROVIDER=kokoro
+    - TTS_CACHE_ENABLED=true
+    - TTS_CACHE_TTL=86400
+    - TTS_FALLBACK_PROVIDERS=piper,elevenlabs
+```
+
+Update Dockerfile:
+
+```dockerfile
+FROM python:3.9-slim
+
+# Arguments
+ARG INSTALL_REALTIMETTS=false
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    curl \
+    portaudio19-dev \
+    python3-pyaudio \
+    ffmpeg \
+    libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first for better caching
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Install RealtimeTTS if requested
+RUN if [ "$INSTALL_REALTIMETTS" = "true" ] ; then \
+    pip install --no-cache-dir RealtimeTTS pyaudio nltk ; \
+    python -c "import nltk; nltk.download('punkt')" ; \
+    fi
+
+# ... rest of Dockerfile ...
+```
+
+### Step-by-Step Integration
+
+1. Create the directory structure:
+   ```bash
+   mkdir -p app/modules/tts/providers
+   ```
+
+2. Copy and implement all the classes and modules from this guide.
+
+3. Update the main application to use the new TTS service:
+   ```python
+   # In app.py, update TTS service initialization
+   tts_config = {
+       "default_provider": app_config.TTS_PROVIDER,
+       "fallback_providers": app_config.TTS_FALLBACK_PROVIDERS.split(','),
+       "cache_enabled": app_config.TTS_CACHE_ENABLED,
+       "cache_ttl": app_config.TTS_CACHE_TTL,
+       # ... rest of config ...
+   }
+   
+   # Initialize TTS service with fallback support
+   tts_service = TTSService(
+       redis_client=redis_store.redis,
+       telnyx_handler=telnyx_handler,
+       config=tts_config
+   )
+   
+   # Initialize streaming manager
+   tts_streaming_manager = TelnyxStreamingManager(telnyx_handler)
+   
+   # Initialize call quality monitor
+   call_quality_monitor = CallQualityMonitor(tts_service, tts_streaming_manager)
+   
+   # Store in app config
+   app.config['TTS_SERVICE'] = tts_service
+   app.config['TTS_STREAMING_MANAGER'] = tts_streaming_manager
+   app.config['CALL_QUALITY_MONITOR'] = call_quality_monitor
+   ```
+
+4. Add a TTS testing endpoint for development:
+   ```python
+   @app.route('/dev/tts/test_stream', methods=['POST'])
+   def test_tts_stream():
+       """Test TTS streaming."""
+       data = request.json
+       if not data or 'text' not in data:
+           return jsonify({"error": "Text is required"}), 400
+               
+       voice_id = data.get('voice_id', 'default_female')
+       
+       # Create an audio player to save audio chunks
+       audio_chunks = []
+       
+       # Generate streaming audio
+       for chunk in tts_service.generate_dialog_speech_stream(data['text'], voice_id):
+           audio_chunks.append(chunk)
+       
+       # Combine audio chunks
+       combined_audio = b''.join(audio_chunks)
+       
+       # Return audio as binary response
+       return Response(combined_audio, mimetype='audio/wav')
+   ```
+
+5. Update the webhook handler to use streaming:
+   ```python
+   # In webhook_blueprint.py
+   
+   # Update call.answered event handler
+   if event_type == 'call.answered':
+       # ... existing code ...
+       
+       # Generate greeting message
+       greeting = f"Hello {user.name}, this is your morning coffee. Today's affirmation is: {call_session.affirmation}"
+       
+       # Use streaming for better latency
+       audio_generator = tts_service.generate_dialog_speech_stream(
+           text=greeting, 
+           voice_id="default_female"
+       )
+              
+       # Start streaming
+       stream_id = tts_streaming_manager.start_streaming(
+           call_control_id=call_control_id,
+           audio_generator=audio_generator,
+           client_state_prefix="greeting"
+       )
+       
+       # Start monitoring the call
+       call_quality_monitor.start_call_monitoring(call_session.id)
+       call_quality_monitor.start_streaming_session(call_session.id, stream_id)
+       
+       # Store stream ID in call session
+       call_session.stream_id = stream_id
+       redis_store.update_call_session(call_session)
+       
+       return jsonify({"status": "streaming started"})
+   ```
+
+6. Prewarm the TTS service on application startup:
+   ```python
+   # app/app.py
+   
+   # In create_app function, after initializing TTS service
+   
+   # Prewarm TTS service in background
+   @app.before_first_request
+   def prewarm_tts():
+       """Prewarm TTS service with common phrases."""
+       common_phrases = [
+           "Hello, how are you today?",
+           "Your affirmation for today is",
+           "Please repeat after me",
+           "Thank you for your response",
+           "Is there anything else you'd like to discuss?",
+           "I didn't quite catch that. Could you please repeat?",
+           "Thank you for your time. Have a wonderful day!"
+       ]
+       
+       default_voices = ["default_female", "default_male"]
+       
+       try:
+           tts_service = current_app.config.get('TTS_SERVICE')
+           if tts_service:
+               logger.info("Prewarming TTS service...")
+               tts_service.prewarm(phrases=common_phrases, voice_ids=default_voices, async_mode=True)
+       except Exception as e:
+           logger.error(f"Error prewarming TTS service: {e}")
+   ```
+
+7. Add a metrics endpoint for monitoring:
+   ```python
+   # app/routes/__init__.py
+   from flask import Blueprint
+   
+   # Create metrics blueprint
+   metrics_bp = Blueprint('metrics', __name__, url_prefix='/metrics')
+   
+   # Import and register routes
+   from .metrics import *
+   
+   # Register blueprint in app.py
+   app.register_blueprint(metrics_bp)
+   ```
+
+## Performance Tuning Recommendations
+
+1. **Profile and Benchmark Each Provider**
+   - Measure initial response time and throughput using the benchmarking tools
+   - Compare streaming vs. non-streaming performance for each provider
+   - Identify CPU and memory usage patterns on your deployment hardware
+   - Example: `curl -X POST http://localhost:5000/metrics/benchmark -H "Content-Type: application/json" -d '{"text":"Your daily affirmation is: I am capable of achieving my goals and dreams."}'`
+
+2. **Optimize Redis Caching**
+   - Set appropriate TTL for different content types (longer for common phrases)
+   - Use Redis compression for audio data with the COMPRESS directive
+   - Configure eviction policies to retain frequent content
+   - Add this to your Redis configuration:
+     ```
+     maxmemory 1gb
+     maxmemory-policy allkeys-lru
+     ```
+
+3. **Tune Voice Profiles**
+   - Identify voices with lowest latency for each provider
+   - Create voice mappings prioritizing performance:
+     ```python
+     voice_mapping = {
+         "default_female": {
+             "kokoro": "en_female_1",
+             "google": "en-US-Chirp3-Standard-F",
+             "elevenlabs": "Rachel"
+         },
+         "default_male": {
+             "kokoro": "en_male_1",
+             "google": "en-US-Chirp3-Standard-M",
+             "elevenlabs": "Adam"
+         }
+     }
+     ```
+   - Test different voice clarity vs. speed tradeoffs
+
+4. **Prewarm Strategically**
+   - Analyze common phrases from production logs
+   - Prewarm at application startup and on a schedule:
+     ```python
+     # Add to app/__init__.py
+     def schedule_prewarming():
+         """Schedule regular prewarming of TTS engine."""
+         from apscheduler.schedulers.background import BackgroundScheduler
+         
+         scheduler = BackgroundScheduler()
+         scheduler.add_job(
+             func=prewarm_tts_service,
+             trigger="interval",
+             hours=6
+         )
+         scheduler.start()
+     ```
+   - Maintain a warm cache for frequent users
+
+5. **Celery Worker Configuration**
+   - Set appropriate pool size based on server resources:
+     ```
+     # celery_config.py
+     worker_pool_type = 'prefork'  # prefork for CPU-bound, eventlet for I/O-bound
+     worker_concurrency = 4        # Number of workers
+     ```
+   - Use prefork for CPU-bound tasks, eventlet for I/O-bound
+   - Configure task priorities with high/normal/low queues
+
+6. **Memory Management**
+   - Monitor memory usage of TTS providers
+   - Implement a provider recycling strategy for memory-intensive providers:
+     ```python
+     def recycle_provider_if_needed(provider):
+         """Recycle provider if memory usage is too high."""
+         import psutil
+         
+         process = psutil.Process(os.getpid())
+         memory_usage = process.memory_info().rss / (1024 * 1024)  # MB
+         
+         if memory_usage > 1000:  # 1GB threshold
+             logger.info(f"Recycling provider due to high memory usage: {memory_usage}MB")
+             return True
+         return False
+     ```
+
+7. **Audio Chunk Size Optimization**
+   - Test different chunk sizes for optimal streaming performance
+   - Balance between latency and network overhead
+   - Example configuration:
+     ```python
+     # For high-speed connections
+     chunk_size = 4096
+     
+     # For slower connections
+     chunk_size = 2048
+     ```
+
+## Implementation Roadmap
+
+### Phase 1: Core Streaming (Weeks 1-2)
+
+1. **Set up basic framework**
+   - Implement Base Streaming Provider
+   - Create Text Fragmentation Engine
+   - Setup Event System
+
+2. **Implement enhanced Kokoro provider**
+   - Add streaming support
+   - Add initial fragment optimization
+
+3. **Update TTS service**
+   - Integrate with providers
+   - Add basic caching
+
+4. **Basic Telnyx streaming**
+   - Implement chunk-based streaming
+   - Basic error handling
+
+### Phase 2: Optimizations (Weeks 3-4)
+
+1. **Enhanced caching system**
+   - Implement multi-layer cache
+   - Add predictive caching
+
+2. **Voice pooling**
+   - Implement provider pools
+   - Add resource management
+
+3. **Advanced Dialog Manager**
+   - Add sentence processing
+   - Implement pause management
+
+4. **Background processing**
+   - Set up Celery integration
+   - Implement task queues
+
+### Phase 3: Enhanced Integrations (Weeks 5-6)
+
+1. **Fallback mechanisms**
+   - Implement provider fallback
+   - Add automatic recovery
+
+2. **Advanced streaming**
+   - Implement adaptive streaming
+   - Add quality monitoring
+
+3. **Monitoring and metrics**
+   - Implement benchmarking tools
+   - Add dashboard
+
+4. **Testing and tuning**
+   - Conduct load testing
+   - Performance optimization
+
+## Testing the Integration
+
+### Verify TTS Service
+
+```bash
+# Test basic TTS generation
+curl -X POST http://localhost:5000/dev/tts/test -H "Content-Type: application/json" -d '{"text":"Hello, this is a test of the TTS system."}'
+
+# Test streaming TTS
+curl -X POST http://localhost:5000/dev/tts/test_stream -H "Content-Type: application/json" -d '{"text":"Hello, this is a test of the streaming TTS system."}'
+```
+
+### Test Call Flow
+
+1. Make a test call:
+   ```bash
+   curl -X POST http://localhost:5000/api/make_call -H "Content-Type: application/json" -H "X-API-Key: your_api_key" -d '{"user_id":"test_user_id"}'
+   ```
+
+2. Check call metrics:
+   ```bash
+   curl http://localhost:5000/metrics/call_quality/test_call_id
+   ```
+
+3. Run benchmarks:
+   ```bash
+   curl -X POST http://localhost:5000/metrics/benchmark -H "Content-Type: application/json" -d '{}'
+   ```
+
+## Conclusion
+
+This comprehensive guide provides a detailed approach to enhancing the Morning Coffee application with RealtimeTTS features. The improvements focus on creating a more responsive, natural, and reliable conversation experience through:
+
+1. **Streaming-first architecture** for reduced latency
+2. **Advanced buffering system** for smooth playback
+3. **Comprehensive event system** for monitoring and diagnostics
+4. **Provider fallback mechanism** for increased reliability
+5. **Enhanced background processing** with prioritized tasks
+6. **Telnyx streaming integration** for improved call quality
+7. **Dialog optimization** for natural conversation flow
+
+By implementing these enhancements progressively using the provided roadmap, you'll transform the Morning Coffee application into a more responsive, user-friendly system with significantly improved performance characteristics and increased reliability.
+
+The most important improvements to implement first are the streaming-first architecture and dialog management, as these will provide the most noticeable improvements in user experience. After those core components are in place, you can incrementally add the caching optimizations, fallback mechanisms, and monitoring tools to further enhance the system.

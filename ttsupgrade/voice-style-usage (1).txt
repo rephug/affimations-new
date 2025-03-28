@@ -1,0 +1,427 @@
+#!/usr/bin/env python
+# Example of using voice styles in Morning Coffee call flow
+
+import os
+import sys
+import logging
+import json
+from typing import Dict, Any, Optional
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger('voice-style-example')
+
+# Example call flow demonstrating different voice styles for different parts of a call
+class CallFlowExample:
+    """Example implementation of a call flow with voice styling."""
+    
+    def __init__(self, tts_service, telnyx_handler):
+        """
+        Initialize the call flow example.
+        
+        Args:
+            tts_service: TTS service instance
+            telnyx_handler: Telnyx handler instance
+        """
+        self.tts_service = tts_service
+        self.telnyx_handler = telnyx_handler
+        
+        # Different voice styles for different parts of the call
+        self.voice_styles = {
+            "greeting": "Speak in a friendly, warm, welcoming tone with moderate enthusiasm",
+            "affirmation": "Speak in a calm, clear, confident voice that's motivational and uplifting",
+            "instruction": "Speak in a clear, instructional voice like a helpful teacher or guide",
+            "listening": "Speak in a curious, attentive voice that shows you're listening",
+            "response": "Speak in a thoughtful, empathetic voice that shows you understand",
+            "goodbye": "Speak in a warm, appreciative tone that conveys gratitude and closure"
+        }
+    
+    def handle_call_answered(self, call_control_id, user_name, affirmation):
+        """
+        Handle the call.answered event.
+        
+        Args:
+            call_control_id (str): Call control ID
+            user_name (str): User's name
+            affirmation (str): Daily affirmation for the user
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Generate greeting with greeting voice style
+            greeting_text = f"Good morning, {user_name}! Welcome to your daily Morning Coffee call."
+            
+            # Check if the TTS service supports voice styling
+            if self.tts_service.supports_capability("voice_style"):
+                logger.info("Using voice styling for greeting")
+                audio_data = self.tts_service.generate_with_style(
+                    text=greeting_text,
+                    style=self.voice_styles["greeting"]
+                )
+            else:
+                # Fall back to regular voice generation
+                logger.info("Voice styling not supported, using default voice")
+                audio_data = self.tts_service.generate_speech(
+                    text=greeting_text,
+                    voice_id="default_female"
+                )
+            
+            if not audio_data:
+                logger.error("Failed to generate greeting audio")
+                return False
+            
+            # Upload to Telnyx
+            upload_result = self.telnyx_handler.upload_to_storage(file_data=audio_data)
+            if not upload_result:
+                logger.error("Failed to upload greeting audio")
+                return False
+            
+            # Play the greeting
+            success = self.telnyx_handler.play_audio(
+                call_control_id=call_control_id,
+                audio_url=upload_result["url"],
+                client_state="greeting"
+            )
+            
+            return success
+        
+        except Exception as e:
+            logger.error(f"Error handling call.answered: {e}")
+            return False
+    
+    def handle_greeting_finished(self, call_control_id, user_name, affirmation):
+        """
+        Handle the greeting finished event.
+        
+        Args:
+            call_control_id (str): Call control ID
+            user_name (str): User's name
+            affirmation (str): Daily affirmation for the user
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Generate affirmation with affirmation voice style
+            affirmation_text = f"Today's affirmation is: {affirmation}"
+            
+            # Use voice styling if supported
+            if self.tts_service.supports_capability("voice_style"):
+                logger.info("Using voice styling for affirmation")
+                audio_data = self.tts_service.generate_with_style(
+                    text=affirmation_text,
+                    style=self.voice_styles["affirmation"]
+                )
+            else:
+                # Fall back to regular voice generation
+                logger.info("Voice styling not supported, using default voice")
+                audio_data = self.tts_service.generate_speech(
+                    text=affirmation_text,
+                    voice_id="default_female"
+                )
+            
+            if not audio_data:
+                logger.error("Failed to generate affirmation audio")
+                return False
+            
+            # Upload to Telnyx
+            upload_result = self.telnyx_handler.upload_to_storage(file_data=audio_data)
+            if not upload_result:
+                logger.error("Failed to upload affirmation audio")
+                return False
+            
+            # Play the affirmation
+            success = self.telnyx_handler.play_audio(
+                call_control_id=call_control_id,
+                audio_url=upload_result["url"],
+                client_state="affirmation"
+            )
+            
+            return success
+        
+        except Exception as e:
+            logger.error(f"Error handling greeting finished: {e}")
+            return False
+    
+    def handle_affirmation_finished(self, call_control_id):
+        """
+        Handle the affirmation finished event.
+        
+        Args:
+            call_control_id (str): Call control ID
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Generate instruction with instruction voice style
+            instruction_text = "Now, please repeat the affirmation after me. This helps internalize the positive message."
+            
+            # Use voice styling if supported
+            if self.tts_service.supports_capability("voice_style"):
+                logger.info("Using voice styling for instruction")
+                audio_data = self.tts_service.generate_with_style(
+                    text=instruction_text,
+                    style=self.voice_styles["instruction"]
+                )
+            else:
+                # Fall back to regular voice generation
+                logger.info("Voice styling not supported, using default voice")
+                audio_data = self.tts_service.generate_speech(
+                    text=instruction_text,
+                    voice_id="default_female"
+                )
+            
+            if not audio_data:
+                logger.error("Failed to generate instruction audio")
+                return False
+            
+            # Upload to Telnyx
+            upload_result = self.telnyx_handler.upload_to_storage(file_data=audio_data)
+            if not upload_result:
+                logger.error("Failed to upload instruction audio")
+                return False
+            
+            # Play the instruction
+            success = self.telnyx_handler.play_audio(
+                call_control_id=call_control_id,
+                audio_url=upload_result["url"],
+                client_state="repeat_prompt"
+            )
+            
+            return success
+        
+        except Exception as e:
+            logger.error(f"Error handling affirmation finished: {e}")
+            return False
+    
+    def handle_user_response(self, call_control_id, user_text, llm_response):
+        """
+        Handle the user's response after transcription.
+        
+        Args:
+            call_control_id (str): Call control ID
+            user_text (str): Transcribed user text
+            llm_response (str): LLM response to user text
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Use voice styling if supported
+            if self.tts_service.supports_capability("voice_style"):
+                logger.info("Using voice styling for response")
+                audio_data = self.tts_service.generate_with_style(
+                    text=llm_response,
+                    style=self.voice_styles["response"]
+                )
+            else:
+                # Fall back to regular voice generation
+                logger.info("Voice styling not supported, using default voice")
+                audio_data = self.tts_service.generate_speech(
+                    text=llm_response,
+                    voice_id="default_female"
+                )
+            
+            if not audio_data:
+                logger.error("Failed to generate response audio")
+                return False
+            
+            # Upload to Telnyx
+            upload_result = self.telnyx_handler.upload_to_storage(file_data=audio_data)
+            if not upload_result:
+                logger.error("Failed to upload response audio")
+                return False
+            
+            # Play the response
+            success = self.telnyx_handler.play_audio(
+                call_control_id=call_control_id,
+                audio_url=upload_result["url"],
+                client_state="ai_response"
+            )
+            
+            return success
+        
+        except Exception as e:
+            logger.error(f"Error handling user response: {e}")
+            return False
+    
+    def handle_final_prompt(self, call_control_id):
+        """
+        Handle the final prompt before ending the call.
+        
+        Args:
+            call_control_id (str): Call control ID
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Generate prompt with listening voice style
+            prompt_text = "Is there anything else on your mind today, or would you like to end our call?"
+            
+            # Use voice styling if supported
+            if self.tts_service.supports_capability("voice_style"):
+                logger.info("Using voice styling for prompt")
+                audio_data = self.tts_service.generate_with_style(
+                    text=prompt_text,
+                    style=self.voice_styles["listening"]
+                )
+            else:
+                # Fall back to regular voice generation
+                logger.info("Voice styling not supported, using default voice")
+                audio_data = self.tts_service.generate_speech(
+                    text=prompt_text,
+                    voice_id="default_female"
+                )
+            
+            if not audio_data:
+                logger.error("Failed to generate prompt audio")
+                return False
+            
+            # Upload to Telnyx
+            upload_result = self.telnyx_handler.upload_to_storage(file_data=audio_data)
+            if not upload_result:
+                logger.error("Failed to upload prompt audio")
+                return False
+            
+            # Play the prompt
+            success = self.telnyx_handler.play_audio(
+                call_control_id=call_control_id,
+                audio_url=upload_result["url"],
+                client_state="chat_prompt"
+            )
+            
+            return success
+        
+        except Exception as e:
+            logger.error(f"Error handling final prompt: {e}")
+            return False
+    
+    def handle_goodbye(self, call_control_id, user_name):
+        """
+        Handle the goodbye message before hanging up.
+        
+        Args:
+            call_control_id (str): Call control ID
+            user_name (str): User's name
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Generate goodbye with goodbye voice style
+            goodbye_text = f"Thank you for your time today, {user_name}. Remember your affirmation throughout the day. Have a wonderful day ahead!"
+            
+            # Use voice styling if supported
+            if self.tts_service.supports_capability("voice_style"):
+                logger.info("Using voice styling for goodbye")
+                audio_data = self.tts_service.generate_with_style(
+                    text=goodbye_text,
+                    style=self.voice_styles["goodbye"]
+                )
+            else:
+                # Fall back to regular voice generation
+                logger.info("Voice styling not supported, using default voice")
+                audio_data = self.tts_service.generate_speech(
+                    text=goodbye_text,
+                    voice_id="default_female"
+                )
+            
+            if not audio_data:
+                logger.error("Failed to generate goodbye audio")
+                return False
+            
+            # Upload to Telnyx
+            upload_result = self.telnyx_handler.upload_to_storage(file_data=audio_data)
+            if not upload_result:
+                logger.error("Failed to upload goodbye audio")
+                return False
+            
+            # Play the goodbye
+            success = self.telnyx_handler.play_audio(
+                call_control_id=call_control_id,
+                audio_url=upload_result["url"],
+                client_state="goodbye"
+            )
+            
+            return success
+        
+        except Exception as e:
+            logger.error(f"Error handling goodbye: {e}")
+            return False
+
+# Example usage in webhook handler
+def example_usage():
+    """Example of how to use the CallFlowExample in the webhook handler."""
+    
+    # This is a simplified example - in real usage, these would be imported from app.py
+    from flask import current_app
+    
+    # Get service instances
+    tts_service = current_app.config['TTS_SERVICE']
+    telnyx_handler = current_app.config['TELNYX_HANDLER']
+    
+    # Initialize call flow
+    call_flow = CallFlowExample(tts_service, telnyx_handler)
+    
+    # Handle different webhook events
+    def handle_webhook(event_type, call_control_id, client_state, user):
+        """Handle webhook events with voice styling."""
+        
+        if event_type == 'call.answered':
+            # Call was answered, start the call flow with greeting
+            call_flow.handle_call_answered(
+                call_control_id=call_control_id,
+                user_name=user.name,
+                affirmation=user.daily_affirmation
+            )
+            
+        elif event_type == 'call.playback.ended':
+            if client_state == 'greeting':
+                # Greeting finished, play the affirmation
+                call_flow.handle_greeting_finished(
+                    call_control_id=call_control_id,
+                    user_name=user.name,
+                    affirmation=user.daily_affirmation
+                )
+                
+            elif client_state == 'affirmation':
+                # Affirmation finished, prompt user to repeat
+                call_flow.handle_affirmation_finished(call_control_id)
+                
+            elif client_state == 'ai_response':
+                # AI response finished, ask if user wants to continue
+                call_flow.handle_final_prompt(call_control_id)
+                
+            elif client_state == 'goodbye':
+                # Goodbye finished, hang up the call
+                telnyx_handler.hangup_call(call_control_id)
+                
+        elif event_type == 'call.recording.saved' and client_state == 'recording_chat':
+            # User response recorded, transcribe and generate AI response
+            
+            # In real usage, the transcription and LLM response would be processed
+            # This is a simplified example
+            transcribed_text = "I'm feeling good today, but a bit nervous about my presentation."
+            llm_response = "I understand feeling nervous about presentations. Remember that you're well-prepared and capable. Take deep breaths before starting, and remember that everyone wants you to succeed."
+            
+            # Handle the user response
+            call_flow.handle_user_response(
+                call_control_id=call_control_id,
+                user_text=transcribed_text,
+                llm_response=llm_response
+            )
+            
+        elif event_type == 'call.hangup':
+            # Call hung up, clean up resources
+            logger.info(f"Call {call_control_id} hung up")
+
+# If this file is run directly, demonstrate usage
+if __name__ == "__main__":
+    print("This is a module to be imported and used in the webhook handler.")
+    print("For a standalone demo, use the openai-voice-style-example.py script.")

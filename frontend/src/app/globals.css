@@ -1,0 +1,124 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground-rgb: 0, 0, 0;
+  --background-start-rgb: 240, 240, 240;
+  --background-end-rgb: 255, 255, 255;
+  
+  /* Morning Coffee Theme Colors */
+  --deep-brown: #3B2416;
+  --medium-brown: #825B3F;
+  --coffee: #A27254;
+  --caramel: #C89F82;
+  --cream: #F4E4CF;
+  --sunrise-orange: #FF8C42;
+  --warm-yellow: #FFD166;
+  --morning-blue: #7BBCDE;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --foreground-rgb: 255, 255, 255;
+    --background-start-rgb: 15, 23, 42;
+    --background-end-rgb: 2, 6, 23;
+  }
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  min-height: 100vh;
+}
+
+/* Morning Coffee Theme Components */
+.morning-coffee-gradient {
+  background: linear-gradient(135deg, var(--cream) 0%, var(--caramel) 100%);
+  min-height: 100vh;
+}
+
+.morning-coffee-card {
+  background: white;
+  border-radius: 1rem;
+  box-shadow: 0 4px 6px rgba(59, 36, 22, 0.1);
+  transition: all 0.3s ease;
+}
+
+.morning-coffee-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 15px rgba(59, 36, 22, 0.15);
+}
+
+.morning-coffee-button {
+  background: var(--sunrise-orange);
+  color: white;
+  padding: 0.75rem 1.5rem;
+  border-radius: 0.5rem;
+  font-weight: 600;
+  transition: all 0.3s ease;
+  cursor: pointer;
+  border: none;
+  outline: none;
+}
+
+.morning-coffee-button:hover {
+  background: var(--deep-brown);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(59, 36, 22, 0.2);
+}
+
+.morning-coffee-button:disabled {
+  background: var(--medium-brown);
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.gradient-heading {
+  background: linear-gradient(to right, var(--deep-brown), var(--sunrise-orange));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Voice Testing Lab Specific Styles */
+.voice-option {
+  padding: 1rem;
+  border-radius: 0.5rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.voice-option:hover {
+  background: var(--cream);
+}
+
+.voice-option.selected {
+  background: var(--sunrise-orange);
+  color: white;
+}
+
+/* Range Input Styling */
+input[type="range"] {
+  -webkit-appearance: none;
+  width: 100%;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--cream);
+  outline: none;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--sunrise-orange);
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  background: var(--deep-brown);
+  transform: scale(1.1);
+} 

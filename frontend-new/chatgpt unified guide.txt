@@ -1,0 +1,526 @@
+Below is a comprehensive, unified guide that merges the strengths of both documents into a single resource. It combines the high-level design, technical requirements, and detailed implementation steps with concrete code samples and component breakdowns. You can use this guide as a one-stop reference for planning, designing, developing, testing, and deploying the Morning Coffee frontend application.
+
+---
+
+# Comprehensive Frontend Implementation Guide for Morning Coffee
+
+This guide outlines everything from project vision to technical implementation for the Morning Coffee voice assistant’s frontend. It is designed to align design, development, testing, and deployment efforts.
+
+---
+
+## 1. Project Overview
+
+Morning Coffee is a voice-first personal assistant that makes morning calls to users. The application delivers personalized affirmations, summarizes information (emails, tasks, weather, traffic, and news), and performs voice analysis to offer tailored emotional and performance feedback. The guide covers:
+
+- **Project Vision:** Delivering a seamless, accessible, and responsive voice assistant experience.
+- **Core Use Cases:** Authentication, user dashboard, call history and insights, task management, voice analysis, and more.
+
+---
+
+## 2. Technology Stack
+
+- **Frontend Framework:** Next.js 14+ with App Router  
+- **UI Library:** React  
+- **Styling:** Tailwind CSS with a custom design system (incorporating shadcn/ui and custom guidelines)  
+- **State Management:** Zustand  
+- **Data Fetching:** React Query / TanStack Query  
+- **Authentication:** Supabase Auth  
+- **Database:** Supabase (PostgreSQL)  
+- **Vector Storage:** Weaviate  
+- **Animations:** Framer Motion  
+- **Form Handling:** React Hook Form with Zod validation  
+- **Charts/Visualizations:** Chart.js with React wrappers  
+- **Testing:** Cypress (E2E) and React Testing Library (component tests)  
+- **Component Development:** Storybook  
+
+---
+
+## 3. Core Principles & Design Goals
+
+- **Accessibility:**  
+  - WCAG 2.1 AA compliant, keyboard navigable, proper ARIA attributes, and sufficient color contrast.
+- **Responsive Design:**  
+  - Mobile-first approach ensuring usability across devices.
+- **Performance:**  
+  - Optimized for Core Web Vitals and overall fast load times.
+- **Progressive Enhancement:**  
+  - Core functionality works without JavaScript.
+- **Type Safety & Modularity:**  
+  - Use TypeScript throughout and maintain a component-based architecture for reusability and clarity.
+- **Consistent Design Language:**  
+  - Adhere to a unified design system for colors, typography, spacing, and interactions.
+
+---
+
+## 4. Project Structure & File Organization
+
+Adopt a modern Next.js App Router structure. Below is an example file tree that incorporates both high-level views and practical code guidance:
+
+```
+app/
+├── (auth)/
+│   ├── login/
+│   ├── register/
+│   └── reset-password/
+├── (dashboard)/
+│   ├── dashboard/
+│   ├── profile/
+│   ├── calls/
+│   ├── tasks/
+│   ├── info-hub/
+│   ├── affirmations/
+│   └── voice-insights/
+├── (admin)/
+│   ├── admin/
+│   └── developer/
+└── testing/
+    ├── components/
+    ├── workflows/
+    ├── voice-lab/
+    └── data-sim/
+```
+
+This structure supports clear separation between authentication, user-facing pages, admin areas, and dedicated testing environments.
+
+---
+
+## 5. Pages & Components
+
+### 5.1. Authentication Pages
+
+**Login Page (`/login`):**
+- Email/password form with “Remember me.”
+- OAuth login buttons (Google, Microsoft).
+- Forgot password and registration links.
+- Redirect to the dashboard upon success.
+
+**Registration Page (`/register`):**
+- Form for name, email, and password.
+- Terms of service and email verification flow.
+- Optional onboarding for voice and call preferences.
+
+**Password Reset Page (`/reset-password`):**
+- Email input for reset link.
+- Token validation and password update form.
+
+**Onboarding Flow:**
+- Multi-step process collecting personal info, voice preferences, special interests, service authorizations, and call scheduling preferences.
+
+### 5.2. User Dashboard & Core Views
+
+**Dashboard (`/dashboard`):**
+- **Header:**  
+  - User greeting, notifications, and quick access to settings.
+- **Affirmation Widget:**  
+  - Displays the daily affirmation with audio playback and refresh options.
+- **Call Schedule & History:**  
+  - Shows next scheduled call, a calendar view, and recent call summaries.
+- **Task Overview:**  
+  - Lists priority tasks with quick add and status toggles.
+- **Information Preview:**  
+  - Displays email summaries, weather, traffic, and special interest updates.
+- **Voice Insights:**  
+  - Offers basic visualization of recent voice analysis trends and metrics.
+
+**Profile & Preferences (`/profile`):**
+- **Personal Information:**  
+  - Editable fields for name, contact, and profile picture.
+- **Voice & Call Settings:**  
+  - TTS provider, voice style selection with sample playback, call schedule, and duration.
+- **External Connections:**  
+  - Integration with email, calendar, and task management systems.
+- **Privacy & Data Settings:**  
+  - Controls for data retention, recording permissions, and account deletion.
+
+**Call History & Insights (`/calls`):**
+- **Call Timeline:**  
+  - Chronological list with filtering (date, duration, topics).
+- **Call Detail View:**  
+  - Full transcription, audio playback, topic breakdown, and emotional trend visualization.
+- **Semantic Search:**  
+  - Natural language query interface to search through conversation history.
+
+**Task Management (`/tasks`):**
+- **Task List & Detail:**  
+  - View, add, update, and reorder tasks with due dates, priorities, and category tags.
+- **Calendar Integration:**  
+  - Visualize tasks on a calendar and create tasks directly.
+- **Task Analytics:**  
+  - Metrics on task completion and time-to-completion trends.
+
+**Information Hub (`/info-hub`):**
+- **Email Summary:**  
+  - Prioritized inbox view and actionable items extraction.
+- **Weather & Traffic:**  
+  - Current conditions, forecasts, and commute estimates.
+- **Special Interest Feeds:**  
+  - Customized panels for sports, news, and financial data.
+- **Saved Items Repository:**  
+  - Bookmarks and voice-saved notes with search functionality.
+
+**Affirmation Library (`/affirmations`):**
+- **Affirmation Browser:**  
+  - Grid or list view with categories, ratings, and usage stats.
+- **Affirmation Editor & AI Generation:**  
+  - Tools for editing, generating, and scheduling affirmations.
+- **Usage Insights:**  
+  - Analytics on affirmation impact and frequency.
+
+**Voice Analysis Insights (`/voice-insights`):**
+- **Overview Dashboard:**  
+  - Plots of key voice metrics and anomaly detection.
+- **Emotion Tracking:**  
+  - Charts showing emotion distribution and temporal flow.
+- **Voice Health Monitor:**  
+  - Metrics on pitch, volume, speaking rate, and vocal strain.
+- **Pattern Recognition:**  
+  - Analysis of speech patterns, response latency, and vocabulary trends.
+
+**Admin & Developer Portals (`/admin`, `/developer`):**
+- **User Management & System Health:**  
+  - User lists, permission controls, and performance monitoring.
+- **API & Provider Management:**  
+  - API key handling, usage tracking, and voice provider configurations.
+- **Analytics Dashboard:**  
+  - In-depth user engagement and feature usage statistics.
+
+**Testing Pages (under `/testing`):**
+- **Component Testing:**  
+  - Interfaces for TTS, STT, and voice analysis testing.
+- **Workflow Testing & Simulation:**  
+  - End-to-end call flow simulators, service mocking, and performance monitoring.
+- **Voice Styling Lab:**  
+  - Tools for experimenting with voice style parameters and A/B testing.
+
+---
+
+## 6. Component Library
+
+Develop a robust, reusable component library to ensure consistency:
+
+### UI Elements:
+- **Buttons:**  
+  - Primary, secondary, icon-only variants.
+- **Inputs:**  
+  - Text, email, number, password fields with validation.
+- **Selects & Toggles:**  
+  - Dropdowns, multi-selects, switches, checkboxes, and radios.
+- **Cards & Modals:**  
+  - Content containers and overlay dialogs.
+- **Tooltips & Toasts:**  
+  - Contextual help and transient notifications.
+- **Navigation:**  
+  - Headers, sidebars, tabs, and accordions.
+- **Data Display:**  
+  - Tables, calendars, timelines, progress bars, and charts.
+- **Audio-Specific Components:**  
+  - AudioPlayer, RecordButton, VoiceStyler, and TranscriptViewer.
+
+### Complex Components:
+- **Rich Text Editors:**  
+  - For formatted content input.
+- **Advanced Data Grids:**  
+  - With inline editing and sorting/filtering capabilities.
+- **Kanban Boards & TreeViews:**  
+  - For task and hierarchical data visualization.
+- **MapView:**  
+  - For location-based content and visualizations.
+
+---
+
+## 7. State Management & API Integration
+
+### State Management with Zustand
+
+Organize global state by feature. For example:
+
+```typescript
+// User store example
+interface UserState {
+  user: User | null;
+  preferences: UserPreferences;
+  loading: boolean;
+  error: Error | null;
+  fetchUser: () => Promise<void>;
+  updatePreferences: (prefs: Partial<UserPreferences>) => Promise<void>;
+  logout: () => Promise<void>;
+}
+```
+
+Other stores (calls, tasks, voice analysis, TTS testing) follow similar patterns to keep state modular and maintainable.
+
+### API Integration
+
+Create a service layer to interact with backend endpoints. For example:
+
+```typescript
+// User service sample
+const userService = {
+  getCurrentUser: async () => {
+    // Call your Supabase or custom endpoint
+  },
+  updateProfile: async (data) => {
+    // Update user profile data
+  },
+  updatePreferences: async (prefs) => {
+    // Update user preferences
+  },
+};
+```
+
+Repeat similar patterns for calls, tasks, voice analysis, and TTS services.
+
+---
+
+## 8. Data Schemas
+
+Define TypeScript interfaces for key data entities:
+
+```typescript
+interface User {
+  id: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  phoneNumber: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface UserPreferences {
+  ttsProvider: string;
+  voiceId: string;
+  speakingRate: number;
+  callTime: string;
+  callDays: string[];
+  callDuration: number;
+  contentOrder: string[];
+  specialInterests: SpecialInterest[];
+  recordingEnabled: boolean;
+  dataRetentionDays: number;
+}
+
+interface Call {
+  id: string;
+  userId: string;
+  startTime: string;
+  endTime: string;
+  duration: number;
+  status: 'scheduled' | 'completed' | 'missed' | 'cancelled';
+  recordingUrl?: string;
+  transcriptionId?: string;
+  topics: string[];
+  emotionalState?: EmotionalState;
+}
+
+interface Task {
+  id: string;
+  userId: string;
+  title: string;
+  description?: string;
+  priority: 'low' | 'medium' | 'high';
+  dueDate?: string;
+  completed: boolean;
+  createdAt: string;
+  updatedAt: string;
+  category?: string;
+  tags: string[];
+}
+
+interface VoiceMetrics {
+  userId: string;
+  timeRange: string;
+  average: {
+    pitch: number;
+    volume: number;
+    speakingRate: number;
+    pauseRatio: number;
+    emotionalDistribution: Record<string, number>;
+  };
+  baseline: {
+    pitch: number;
+    volume: number;
+    speakingRate: number;
+    pauseRatio: number;
+    emotionalDistribution: Record<string, number>;
+  };
+}
+
+interface EmotionalState {
+  primary: string;
+  secondary?: string;
+  intensity: number;
+  confidence: number;
+}
+
+interface SpecialInterest {
+  type: 'sports' | 'finance' | 'news' | 'custom';
+  name: string;
+  sources: string[];
+  keywords?: string[];
+  priority: number;
+}
+```
+
+---
+
+## 9. Authentication Implementation
+
+Implement authentication using Supabase:
+
+```typescript
+import { createClient } from '@supabase/supabase-js';
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+export function useAuth() {
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const getCurrentUser = async () => {
+      setLoading(true);
+      const { data: { user } } = await supabase.auth.getUser();
+      setUser(user);
+      setLoading(false);
+    };
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      (event, session) => {
+        setUser(session?.user ?? null);
+        setLoading(false);
+      }
+    );
+
+    getCurrentUser();
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  return { user, loading };
+}
+```
+
+This example sets up user authentication, state management, and session tracking.
+
+---
+
+## 10. Design System & Guidelines
+
+### Colors & Typography
+
+- **Colors:**  
+  - Primary: `#2563EB` (blue-600)  
+  - Secondary: `#4B5563` (gray-600)  
+  - Accent: `#8B5CF6` (purple-500)  
+  - Success: `#10B981` (green-500)  
+  - Warning: `#F59E0B` (amber-500)  
+  - Error: `#EF4444` (red-500)  
+  - Background: `#F3F4F6` (gray-100) / `#1F2937` (dark mode)  
+  - Text: `#111827` (light) / `#F9FAFB` (dark)
+
+- **Typography:**  
+  - Font Family: `'Inter', sans-serif`  
+  - Base Size: `16px`  
+  - Headings and body text with defined sizes and weights (H1: 2.25rem, H2: 1.875rem, etc.)
+
+### Spacing, Border Radius & Shadows
+
+- **Spacing:**  
+  - Base unit: `4px` with a scalable system (0, 4px, 8px, …)
+- **Border Radius:**  
+  - Options from none to full (e.g., 0.125rem for small up to 9999px for pills)
+- **Shadows:**  
+  - SM, Default, MD, LG, XL variants for depth and emphasis
+
+### Animations & Breakpoints
+
+- **Animations:**  
+  - Default timing of 150ms with ease-in-out transitions for opacity, transform, etc.
+- **Breakpoints:**  
+  - SM: 640px, MD: 768px, LG: 1024px, XL: 1280px, 2XL: 1536px
+
+---
+
+## 11. Testing Implementation
+
+### Component & End-to-End Testing
+
+- **Component Testing:**  
+  - Use React Testing Library for unit tests of individual components.
+- **End-to-End Testing:**  
+  - Use Cypress to simulate core user flows (authentication, dashboard interactions, call scheduling, etc.)
+- **Performance & Accessibility Testing:**  
+  - Integrate Lighthouse and perform bundle size monitoring.
+  
+### Specialized Testing Environments
+
+- **TTS/STT Testing Modules:**  
+  - Interfaces to test different voice providers, voice style options, and real-time transcription.
+- **Voice Analysis & Call Flow Simulators:**  
+  - Tools to visualize emotion detection, parameter adjustments, and simulate end-to-end call processes.
+- **Storybook:**  
+  - For component development and interactive documentation.
+
+---
+
+## 12. Deployment Considerations
+
+### Environment & Build Configuration
+
+- **Vercel Deployment:**  
+  - Build Command: `next build`  
+  - Install Command: `npm install`  
+  - Output Directory: `.next`
+- **Environment Variables:**  
+  - `NEXT_PUBLIC_SUPABASE_URL`  
+  - `NEXT_PUBLIC_SUPABASE_ANON_KEY`  
+  - `NEXT_PUBLIC_API_URL` and other service-specific keys (e.g., weather, map, TTS)
+- **Monitoring & Analytics:**  
+  - Vercel Analytics, custom event tracking, and error logging solutions
+
+---
+
+## 13. Next Steps & Launch Roadmap
+
+### Phased Implementation Approach
+
+1. **Phase 1: Foundation**
+   - Project setup, authentication, and basic layout.
+   - Establish core component library.
+2. **Phase 2: Core Functionality**
+   - Develop user dashboard, profile, and essential pages (calls, tasks, info-hub).
+   - Implement API integration and state management.
+3. **Phase 3: Analysis & Insights**
+   - Build advanced voice analysis, affirmation library, and detailed call history.
+   - Integrate testing modules and performance monitoring.
+4. **Phase 4: Testing & Admin**
+   - Develop TTS/STT testing tools, call flow simulators, and the admin/developer dashboards.
+   - Finalize deployment and conduct a controlled rollout.
+
+### Launch Plan
+
+- Deploy preview environments on Vercel.
+- Gather feedback from a limited user group.
+- Iterate on performance and usability before full production launch.
+
+---
+
+## 14. Resources & References
+
+- [Next.js Documentation](https://nextjs.org/docs)
+- [Tailwind CSS Documentation](https://tailwindcss.com/docs)
+- [Supabase Documentation](https://supabase.com/docs)
+- [React Query Documentation](https://tanstack.com/query/latest/docs/react/overview)
+- [Zustand Documentation](https://github.com/pmndrs/zustand)
+- [React Hook Form Documentation](https://react-hook-form.com/get-started)
+- [Framer Motion Documentation](https://www.framer.com/motion/)
+- [Accessibility Guidelines (WCAG)](https://www.w3.org/WAI/standards-guidelines/wcag/)
+
+---
+
+This unified guide brings together the comprehensive technical details, design system, implementation strategies, and testing/deployment processes from both original documents. It is intended to serve as a complete reference for developers, designers, QA teams, and project managers working on the Morning Coffee frontend.

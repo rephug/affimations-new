@@ -1,0 +1,87 @@
+/** @type {import('tailwindcss').Config} */
+module.exports = {
+  darkMode: 'class',
+  content: [
+    './src/pages/**/*.{js,ts,jsx,tsx,mdx}',
+    './src/components/**/*.{js,ts,jsx,tsx,mdx}',
+    './src/app/**/*.{js,ts,jsx,tsx,mdx}',
+  ],
+  safelist: [
+    'bg-sunrise-orange',
+    'text-white',
+    'bg-cream',
+    'hover:bg-caramel',
+    'bg-coffee-gradient',
+    'bg-heading-gradient'
+  ],
+  theme: {
+    extend: {
+      colors: {
+        'deep-brown': '#3B2416',
+        'medium-brown': '#825B3F',
+        'coffee': '#A27254',
+        'caramel': '#C89F82',
+        'cream': '#F4E4CF',
+        'sunrise-orange': '#FF8C42',
+        'warm-yellow': '#FFD166',
+        'morning-blue': '#7BBCDE',
+        
+        primary: {
+          DEFAULT: '#FF8C42',
+          50: '#fff8f2',
+          100: '#fff0e5',
+          200: '#ffddc2',
+          300: '#ffc499',
+          400: '#ff9e4d',
+          500: '#FF8C42',
+          600: '#ff6b17',
+          700: '#e95300',
+          800: '#bf4300',
+          900: '#9c3800',
+          950: '#571d00',
+        },
+        secondary: {
+          DEFAULT: '#825B3F',
+          50: '#f8f5f3',
+          100: '#f0ebe6',
+          200: '#e3d7cc',
+          300: '#d2bda9',
+          400: '#bc9c83',
+          500: '#a58265',
+          600: '#825B3F',
+          700: '#6e4c34',
+          800: '#5d402f',
+          900: '#4f392a',
+          950: '#2e1f16',
+        },
+        accent: {
+          DEFAULT: '#FFD166',
+          50: '#fffcf0',
+          100: '#fff8dc',
+          200: '#ffefb0',
+          300: '#ffe57d',
+          400: '#ffda47',
+          500: '#FFD166',
+          600: '#fcb705',
+          700: '#d39502',
+          800: '#a97509',
+          900: '#8b5d0f',
+          950: '#4b3100',
+        },
+      },
+      fontFamily: {
+        sans: ['var(--font-inter)', 'Inter', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
+      },
+      boxShadow: {
+        'coffee-sm': '0 5px 15px rgba(255, 140, 66, 0.3)',
+        'coffee': '0 10px 30px rgba(59, 36, 22, 0.1)',
+        'coffee-lg': '0 15px 35px rgba(59, 36, 22, 0.15)',
+      },
+      backgroundImage: {
+        'coffee-gradient': 'linear-gradient(135deg, #F4E4CF 0%, #C89F82 100%)',
+        'heading-gradient': 'linear-gradient(to right, #3B2416, #FF8C42)',
+      },
+    },
+  },
+  plugins: [],
+};

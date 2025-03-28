@@ -1,0 +1,312 @@
+#!/usr/bin/env python
+# Updated App Initialization for Morning Coffee
+
+import os
+import time
+import logging
+from typing import Dict, Any
+
+from flask import Flask, request, jsonify, Response
+from flask_cors import CORS
+
+from config import config
+from modules.tts.tts_service import TTSService
+from modules.tts.provider_factory import TTSProviderFactory
+from modules.redis_store import RedisStore
+from modules.openai_transcription_handler import OpenAITranscriptionHandler
+from modules.assemblyai_handler import AssemblyAIHandler
+from modules.telnyx_handler import TelnyxHandler
+from modules.llm_handler import LLMHandler
+from api_blueprint import api
+from webhook_blueprint import webhooks
+
+# Configure logging
+logging.basicConfig(
+    level=getattr(logging, config.LOG_LEVEL),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),  # Log to console
+        logging.FileHandler(os.path.join('logs', 'app.log'))  # Log to file
+    ]
+)
+logger = logging.getLogger('app')
+
+def create_app(config_obj=None):
+    """
+    Create and configure the Flask application.
+    
+    Args:
+        config_obj: Optional configuration object to use instead of default config
+                   (useful for testing)
+    
+    Returns:
+        Flask application instance
+    """
+    # Initialize Flask app
+    app = Flask(__name__)
+    CORS(app)  # Enable CORS for all routes
+    
+    # Use provided config or default config
+    app_config = config_obj or config
+    
+    # Check configuration
+    validation = app_config.validate()
+    if not validation['valid']:
+        logger.warning(f"Missing required configuration: {', '.join(validation['missing'])}")
+        logger.warning("Some functionality may be limited")
+    
+    # Initialize service clients
+    redis_store = RedisStore(
+        host=app_config.REDIS_HOST,
+        port=app_config.REDIS_PORT,
+        password=app_config.REDIS_PASSWORD,
+        db=app_config.REDIS_DB
+    )
+    
+    # Initialize TTS service with provider configurations
+    tts_config = {
+        "default_provider": app_config.TTS_PROVIDER,
+        "cache_enabled": app_config.TTS_CACHE_ENABLED,
+        "cache_ttl": app_config.TTS_CACHE_TTL,
+        "provider_config": app_config.get_tts_provider_config(),
+        "voice_mapping": app_config.TTS_VOICE_MAPPING
+    }
+    
+    # Initialize service handlers
+    telnyx_handler = TelnyxHandler(
+        api_key=app_config.TELNYX_API_KEY,
+        phone_number=app_config.TELNYX_PHONE_NUMBER,
+        messaging_profile_id=app_config.TELNYX_MESSAGING_PROFILE_ID,
+        app_id=app_config.TELNYX_APP_ID
+    )
+    
+    # Initialize the TTS service
+    tts_service = TTSService(
+        redis_client=redis_store.redis,
+        telnyx_handler=telnyx_handler,
+        config=tts_config
+    )
+    
+    # Initialize transcription handlers - use OpenAI if available, fall back to AssemblyAI
+    transcription_handler = None
+    
+    # First try to initialize OpenAI handler if API key is available
+    if app_config.OPENAI_API_KEY:
+        try:
+            transcription_handler = OpenAITranscriptionHandler(
+                api_key=app_config.OPENAI_API_KEY,
+                model=app_config.OPENAI_TRANSCRIBE_MODEL
+            )
+            logger.info(f"Using OpenAI for transcription with model: {app_config.OPENAI_TRANSCRIBE_MODEL}")
+        except Exception as e:
+            logger.error(f"Failed to initialize OpenAI transcription handler: {e}")
+            transcription_handler = None
+    
+    # Fall back to AssemblyAI if OpenAI initialization failed or no OpenAI API key
+    if transcription_handler is None and app_config.ASSEMBLYAI_API_KEY:
+        try:
+            transcription_handler = AssemblyAIHandler(
+                api_key=app_config.ASSEMBLYAI_API_KEY
+            )
+            logger.info("Using AssemblyAI for transcription")
+        except Exception as e:
+            logger.error(f"Failed to initialize AssemblyAI handler: {e}")
+            transcription_handler = None
+    
+    if transcription_handler is None:
+        logger.warning("No transcription handler available - call functionality will be limited")
+    
+    # Initialize LLM handler
+    llm_handler = LLMHandler(
+        llm_type=app_config.LLM_TYPE,
+        api_key=app_config.LLM_API_KEY,
+        model=app_config.LLM_MODEL,
+        endpoint=app_config.LLM_ENDPOINT
+    )
+    
+    # Register blueprints
+    app.register_blueprint(api, url_prefix='/api')
+    app.register_blueprint(webhooks, url_prefix='/webhooks')
+    
+    # Store service clients in app config for access in routes
+    app.config['REDIS_STORE'] = redis_store
+    app.config['TTS_SERVICE'] = tts_service
+    app.config['TRANSCRIPTION_HANDLER'] = transcription_handler
+    app.config['TELNYX_HANDLER'] = telnyx_handler
+    app.config['LLM_HANDLER'] = llm_handler
+    
+    # Store config in app
+    app.config['APP_CONFIG'] = app_config
+    
+    logger.info("Morning Coffee application initialized")
+    
+    # Root endpoint
+    @app.route('/')
+    def index():
+        """Root endpoint with application information."""
+        return jsonify({
+            "name": "Morning Coffee",
+            "version": "1.0.0",
+            "description": "A system that sends daily affirmations via SMS, calls users, and enables AI conversation"
+        })
+    
+    # Health check endpoint
+    @app.route('/health')
+    def health():
+        """Health check endpoint."""
+        start_time = time.time()
+        
+        # Check Redis connection
+        redis_health = redis_store.health_check()
+        
+        # Check TTS service
+        tts_health = tts_service.health_check()
+        
+        # Overall health status - only consider Redis critical at startup
+        overall_status = "ok" if redis_health['status'] == 'ok' else "error"
+        
+        # Assemble response
+        health_data = {
+            "status": overall_status,
+            "timestamp": time.time(),
+            "checks": {
+                "redis": redis_health,
+                "tts": tts_health
+            },
+            "response_time_ms": int((time.time() - start_time) * 1000)
+        }
+        
+        # Add transcription service check if available
+        if transcription_handler:
+            try:
+                transcription_health = transcription_handler.health_check()
+                health_data["checks"]["transcription"] = transcription_health
+                if transcription_health.get("status") != "healthy":
+                    overall_status = "degraded"
+            except Exception as e:
+                logger.error(f"Error checking transcription service health: {e}")
+                health_data["checks"]["transcription"] = {
+                    "status": "error",
+                    "message": str(e)
+                }
+                overall_status = "degraded"
+        
+        # Add LLM service check
+        if llm_handler:
+            try:
+                llm_health_result = llm_handler.health_check()
+                # Handle boolean return from LLM handler
+                if isinstance(llm_health_result, bool):
+                    llm_health = {"status": "ok" if llm_health_result else "error"}
+                else:
+                    llm_health = llm_health_result
+                    
+                health_data["checks"]["llm"] = llm_health
+                if not llm_health_result:
+                    overall_status = "degraded"
+            except Exception as e:
+                logger.error(f"LLM health check failed: {e}")
+                health_data["checks"]["llm"] = {"status": "error", "message": str(e)}
+                overall_status = "degraded"
+        
+        # Update overall status
+        health_data["status"] = overall_status
+        
+        # Return with appropriate status code
+        status_code = 200 if overall_status == "ok" else 500 if overall_status == "error" else 200
+        return jsonify(health_data), status_code
+    
+    # Development routes (disabled in production)
+    if app_config.DEBUG:
+        @app.route('/dev/tts/test', methods=['POST'])
+        def test_tts():
+            """Test TTS generation."""
+            data = request.json
+            if not data or 'text' not in data:
+                return jsonify({"error": "Text is required"}), 400
+                
+            voice_id = data.get('voice_id')
+            voice_style = data.get('style')
+            
+            # Use voice_style if provided (for OpenAI-style voice instructions)
+            if voice_style and tts_service.supports_capability("voice_style"):
+                # Generate speech using voice style instruction
+                audio_bytes = tts_service.generate_with_style(
+                    text=data['text'],
+                    style=voice_style
+                )
+            else:
+                # Generate speech using regular voice ID
+                audio_bytes = tts_service.generate_speech(
+                    text=data['text'],
+                    voice_id=voice_id
+                )
+                
+            if not audio_bytes:
+                return jsonify({"error": "TTS failed"}), 500
+                
+            # Return audio as binary response
+            return Response(audio_bytes, mimetype='audio/wav')
+        
+        @app.route('/dev/transcribe/test', methods=['POST'])
+        def test_transcription():
+            """Test transcription."""
+            if not transcription_handler:
+                return jsonify({"error": "No transcription handler available"}), 503
+            
+            # Check if there's audio data in the request
+            if 'audio' not in request.files:
+                return jsonify({"error": "No audio file provided"}), 400
+            
+            audio_file = request.files['audio']
+            if audio_file.filename == '':
+                return jsonify({"error": "No audio file selected"}), 400
+            
+            # Read the audio data
+            audio_data = audio_file.read()
+            
+            # Submit for transcription
+            if isinstance(transcription_handler, OpenAITranscriptionHandler):
+                # OpenAI transcription (synchronous)
+                result = transcription_handler.transcribe_sync(audio_data)
+                if result:
+                    return jsonify({"text": result})
+                else:
+                    return jsonify({"error": "Transcription failed"}), 500
+            else:
+                # AssemblyAI transcription (asynchronous)
+                job = transcription_handler.submit_transcription(audio_data)
+                if not job:
+                    return jsonify({"error": "Failed to submit transcription"}), 500
+                
+                job_id = job.get("job_id")
+                
+                # Poll for result (not practical for production, but useful for testing)
+                max_retries = 30
+                for i in range(max_retries):
+                    status_response = transcription_handler.check_transcription_status(job_id)
+                    status = status_response.get("status")
+                    
+                    if status == "completed":
+                        return jsonify({"text": status_response.get("text", "")})
+                    elif status == "error":
+                        return jsonify({"error": "Transcription failed"}), 500
+                    
+                    # Wait before checking again
+                    time.sleep(1)
+                
+                return jsonify({"error": "Transcription timed out"}), 504
+    
+        @app.route('/dev/clear_test_data', methods=['POST'])
+        def clear_test_data():
+            """Clear test data from Redis (development only)."""
+            redis_store.clear_test_data()
+            logger.info("Cleared test data from Redis")
+            return jsonify({"status": "Test data cleared"})
+    
+    return app
+
+# Run the application
+if __name__ == '__main__':
+    app = create_app()
+    app.run(host='0.0.0.0', port=config.PORT, debug=config.DEBUG)

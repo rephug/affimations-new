@@ -1,0 +1,42 @@
+# Spark TTS Service Dockerfile
+# Uses CUDA for GPU acceleration when available
+
+FROM pytorch/pytorch:2.0.0-cuda11.7-cudnn8-runtime
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libsndfile1 \
+    ffmpeg \
+    git \
+    curl \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY . .
+
+# Create model directory
+RUN mkdir -p /app/models
+
+# Download the Spark TTS model
+# This can be commented out if you want to mount the models as a volume
+RUN python download_model.py
+
+# Expose the API port
+EXPOSE 8020
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8020/health || exit 1
+
+# Start the API server
+CMD ["python", "server.py"]

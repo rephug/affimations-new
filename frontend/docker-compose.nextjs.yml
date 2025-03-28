@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.nextjs
+    image: morning-coffee-frontend
+    container_name: morning-coffee-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env.production
+    networks:
+      - morning-coffee-network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # You can add additional services here if needed
+  # For example, an Nginx service for SSL termination:
+  #
+  # nginx:
+  #   image: nginx:alpine
+  #   container_name: morning-coffee-nginx
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./nginx/conf.d:/etc/nginx/conf.d
+  #     - ./certbot/conf:/etc/letsencrypt
+  #     - ./certbot/www:/var/www/certbot
+  #   depends_on:
+  #     - frontend
+  #   networks:
+  #     - morning-coffee-network
+  #   restart: unless-stopped
+  
+networks:
+  morning-coffee-network:
+    driver: bridge 

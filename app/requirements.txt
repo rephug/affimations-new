@@ -1,0 +1,35 @@
+# Morning Coffee Application Dependencies
+
+# Web Framework
+Flask==2.3.3
+Flask-Cors==4.0.0
+Werkzeug==2.3.7
+gunicorn==21.2.0
+
+# HTTP and API
+requests==2.31.0
+telnyx==2.1.5
+anthropic==0.5.0
+openai==1.1.1
+
+# Data Storage
+redis==5.0.1
+
+# Utilities
+python-dotenv==1.0.0
+tenacity==8.2.3
+pydantic==2.4.2
+pydantic-settings==2.0.3  # Required for pydantic v2 when using BaseSettings
+uuid==1.30
+python-dateutil==2.8.2
+
+# We're using direct REST API calls instead of the SDK
+# No longer need the assemblyai package
+
+# Logging
+structlog==23.1.0
+
+# Testing (development only)
+pytest==7.4.3
+pytest-cov==4.1.0
+coverage==7.3.2 

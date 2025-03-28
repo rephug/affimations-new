@@ -1,0 +1,179 @@
+version: '3.8'
+
+services:
+  # Main Application
+  app:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+      args:
+        - INSTALL_REALTIMETTS=true
+    container_name: morning-coffee-app
+    restart: unless-stopped
+    depends_on:
+      - spark-tts
+      - redis
+    ports:
+      - "5000:5000"
+    environment:
+      - SPARK_TTS_URL=http://spark-tts:8020
+      - REDIS_URL=redis://redis:6379
+      - TZ=UTC
+      # RealtimeTTS configuration 
+      - TTS_PROVIDER=kokoro
+      - TTS_FALLBACK_PROVIDERS=openai,system
+      - TTS_CACHE_ENABLED=true
+      - TTS_CACHE_TTL=86400
+      - TTS_CACHE_MEMORY_CAPACITY=100
+      - TTS_CACHE_MEMORY_ENABLED=true
+      - TTS_CACHE_REDIS_ENABLED=true
+      - TTS_CACHE_FILE_ENABLED=true
+      - TTS_VOICE_POOL_SIZE=2
+      - TTS_VOICE_POOL_MIN_SIZE=1
+      - TTS_VOICE_POOL_MAX_SIZE=5
+      - TTS_VOICE_POOL_TTL=3600
+      - TTS_HEALTH_CHECK_INTERVAL=60
+      - TTS_STREAMING_CHUNK_SIZE_MS=250
+      - TTS_STREAMING_BUFFER_THRESHOLD=3
+      - TTS_STREAMING_MAX_SILENCE_MS=500
+      - TTS_STREAMING_MAX_ACTIVE_STREAMS=10
+      - TTS_INITIAL_FRAGMENT_WORDS=5
+      - TTS_MIN_FIRST_FRAGMENT_WORDS=3
+      - TTS_SENTENCE_PAUSE_MS=300
+      - TTS_MIN_PAUSE_MS=100
+      - TTS_BREAK_ON_PUNCTUATION=.!?;:,
+      - TTS_PREDICTION_DEPTH=2
+      - TTS_PREDICTION_MIN_CONFIDENCE=0.7
+      - TTS_PREWARM_ENABLED=true
+      - TTS_PREWARM_PHRASES=Hello,Welcome to Morning Coffee,Your affirmation for today is,Please repeat after me,Thank you
+    env_file:
+      - .env
+    networks:
+      - morning-coffee-network
+    volumes:
+      - app-data:/app/data
+      - tts-cache:/app/cache/tts
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Spark TTS Service
+  spark-tts:
+    build:
+      context: ./spark-tts
+      dockerfile: Dockerfile
+    container_name: morning-coffee-tts
+    restart: unless-stopped
+    ports:
+      - "8020:8020"
+    environment:
+      - SPARK_TTS_MODEL_ID=SparkAudio/Spark-TTS-0.5B
+      - SPARK_TTS_MODEL_DIR=/app/models
+      - SPARK_TTS_SAMPLE_RATE=24000
+      - TZ=UTC
+    env_file:
+      - .env
+    networks:
+      - morning-coffee-network
+    # Optional GPU support - uncomment if using GPU
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8020/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s  # Longer start period as model loading takes time
+
+  # Redis for State Management and Caching
+  redis:
+    image: redis:7-alpine
+    container_name: morning-coffee-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --maxmemory 1gb --maxmemory-policy allkeys-lru
+    networks:
+      - morning-coffee-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Frontend Service
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: docker/Dockerfile
+    container_name: morning-coffee-frontend
+    restart: unless-stopped
+    depends_on:
+      - app
+      - spark-tts
+    ports:
+      - "8080:80"
+    environment:
+      - REACT_APP_API_URL=http://app:5000
+      - REACT_APP_SUPABASE_URL=${SUPABASE_URL}
+      - REACT_APP_SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+    networks:
+      - morning-coffee-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Optional: Local LLM Service (Uncomment if using local LLM)
+  # llm:
+  #   build:
+  #     context: ./llm
+  #     dockerfile: Dockerfile
+  #   container_name: morning-coffee-llm
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8080:8080"
+  #   environment:
+  #     - MODEL_PATH=/app/models/model.gguf
+  #     - TZ=UTC
+  #   networks:
+  #     - morning-coffee-network
+  #   volumes:
+  #     - llm-models:/app/models
+  #   # GPU support for LLM
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 60s
+
+networks:
+  morning-coffee-network:
+    driver: bridge
+
+volumes:
+  app-data:
+  spark-tts-models:
+  redis-data:
+  tts-cache:
+  # llm-models:  # Uncomment if using local LLM 

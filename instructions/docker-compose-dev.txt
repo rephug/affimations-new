@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  # Development overrides for main application
+  app:
+    build:
+      context: ./app
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./app:/app  # Mount local code directory for hot reloading
+    environment:
+      - FLASK_DEBUG=1
+      - FLASK_ENV=development
+    command: ["flask", "run", "--host=0.0.0.0", "--port=5000", "--reload"]
+
+  # Development overrides for Spark TTS service
+  spark-tts:
+    build:
+      context: ./spark-tts
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./spark-tts:/app  # Mount local code directory for hot reloading
+      - spark-tts-models:/app/models  # Keep models persistent
+    environment:
+      - DEBUG=1
+    command: ["python", "server.py", "--debug"]

@@ -1,0 +1,39 @@
+# Development Dockerfile for Spark TTS Service
+
+FROM pytorch/pytorch:2.0.0-cuda11.7-cudnn8-runtime
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    libsndfile1 \
+    ffmpeg \
+    git \
+    curl \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Install development dependencies
+RUN pip install --no-cache-dir \
+    watchdog \
+    pytest \
+    black \
+    flake8
+
+# Create model directory
+RUN mkdir -p /app/models
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV DEBUG=1
+
+# Development entrypoint - don't download models in dev to save time
+# Models will be mounted from volume
+ENTRYPOINT ["python", "server.py", "--debug"]

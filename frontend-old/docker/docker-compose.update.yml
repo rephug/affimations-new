@@ -1,0 +1,180 @@
+version: '3.8'
+
+services:
+  # Main Application
+  app:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    container_name: morning-coffee-app
+    restart: unless-stopped
+    depends_on:
+      - spark-tts
+      - redis
+    ports:
+      - "5000:5000"
+    environment:
+      - SPARK_TTS_URL=http://spark-tts:8020
+      - REDIS_URL=redis://redis:6379
+      - TZ=UTC
+    env_file:
+      - .env
+    networks:
+      - morning-coffee-network
+    volumes:
+      - app-data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Spark TTS Service
+  spark-tts:
+    build:
+      context: ./spark-tts
+      dockerfile: Dockerfile
+    container_name: morning-coffee-tts
+    restart: unless-stopped
+    ports:
+      - "8020:8020"
+    environment:
+      - SPARK_TTS_MODEL_ID=SparkAudio/Spark-TTS-0.5B
+      - SPARK_TTS_MODEL_DIR=/app/models
+      - SPARK_TTS_SAMPLE_RATE=24000
+      - TZ=UTC
+    networks:
+      - morning-coffee-network
+    volumes:
+      - spark-tts-models:/app/models
+    # Optional GPU support - uncomment if using GPU
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8020/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s  # Longer start period as model loading takes time
+
+  # Redis for State Management and Caching
+  redis:
+    image: redis:alpine
+    container_name: morning-coffee-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    networks:
+      - morning-coffee-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Testing Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: morning-coffee-frontend
+    restart: unless-stopped
+    depends_on:
+      - app
+      - spark-tts
+    ports:
+      - "80:80"
+    networks:
+      - morning-coffee-network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # Optional: Windmill Orchestration
+  # Uncomment to enable Windmill
+  # windmill:
+  #   image: ghcr.io/windmill-labs/windmill:latest
+  #   container_name: morning-coffee-windmill
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8000:8000"
+  #   environment:
+  #     - DATABASE_URL=postgres://postgres:postgres@windmill-db:5432/windmill
+  #     - BASE_URL=http://localhost:8000
+  #     - DISABLE_NSJAIL=true
+  #   networks:
+  #     - morning-coffee-network
+  #   depends_on:
+  #     - windmill-db
+  #   volumes:
+  #     - windmill-data:/app/windmill
+
+  # Optional: Windmill Database
+  # Uncomment to enable Windmill
+  # windmill-db:
+  #   image: postgres:14-alpine
+  #   container_name: morning-coffee-windmill-db
+  #   restart: unless-stopped
+  #   environment:
+  #     - POSTGRES_USER=postgres
+  #     - POSTGRES_PASSWORD=postgres
+  #     - POSTGRES_DB=windmill
+  #   volumes:
+  #     - windmill-db-data:/var/lib/postgresql/data
+  #   networks:
+  #     - morning-coffee-network
+
+  # Optional: Local LLM Service (Uncomment if using local LLM)
+  # llm:
+  #   build:
+  #     context: ./llm
+  #     dockerfile: Dockerfile
+  #   container_name: morning-coffee-llm
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8080:8080"
+  #   environment:
+  #     - MODEL_PATH=/app/models/model.gguf
+  #     - TZ=UTC
+  #   networks:
+  #     - morning-coffee-network
+  #   volumes:
+  #     - llm-models:/app/models
+  #   # GPU support for LLM
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 60s
+
+networks:
+  morning-coffee-network:
+    driver: bridge
+
+volumes:
+  app-data:
+  spark-tts-models:
+  redis-data:
+  # windmill-data:
+  # windmill-db-data:
+  # llm-models:  # Uncomment if using local LLM
