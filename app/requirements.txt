@@ -32,4 +32,4 @@ structlog==23.1.0
 # Testing (development only)
 pytest==7.4.3
 pytest-cov==4.1.0
-coverage==7.3.2 
+coverage==7.3.2 backoff==2.2.1
